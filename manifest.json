@@ -1,7 +1,7 @@
 {
   "id": "antigravity",
   "name": "Antigravity",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "minAppVersion": "1.13.0",
   "description": "Autonomous vault management, knowledge organization, and agentic intelligence powered by Google Antigravity (agy).",
   "author": "keyongcheng",
