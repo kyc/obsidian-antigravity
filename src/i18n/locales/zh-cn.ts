@@ -134,6 +134,7 @@ const zhCn: LocaleDictionary = {
   'statusBar.tooltipReady': 'Antigravity：就绪。点击打开菜单。',
   'statusBar.menuStopTask': '停止当前任务',
   'statusBar.menuOpenHub': '打开 Assistant Web Hub 视图',
+  'statusBar.hubStartFailed': 'Hub 启动失败',
 
   // General Notices & Progress
   'notices.taskStopped': 'Antigravity 任务已停止。',
@@ -148,6 +149,8 @@ const zhCn: LocaleDictionary = {
   'notices.taskCancelledError': 'Antigravity 任务已取消。',
   'notices.processExitError': 'Antigravity 进程退出，退出码 {code}',
   'notices.rulesPathInvalid': "[Antigravity] 无效的规则路径 '{rulesRelPath}' 超出库范围。已回退至默认 'AGENTS.md'。",
+  'notices.hubAutoStartFailed': '[Antigravity] 无法自动启动 Hub：{error}',
+  'notices.vaultPathUnavailable': '无法确定库路径，Hub 未启动。',
 };
 
 export default zhCn;

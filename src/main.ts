@@ -179,9 +179,16 @@ export default class AntigravityPlugin extends Plugin {
             this.settings.hubProfile || 'antigravity-obsidian',
             this.settings.defaultAgent,
           )
-          .catch(() => {
-            // Silent failure on auto-start background task
+          .catch((err: unknown) => {
+            // Auto-start runs in the background, but failing silently leaves
+            // the user with a hub that never comes up and no explanation.
+            new Notice(t('notices.hubAutoStartFailed', { error: (err as Error).message }));
+            this.statusBar.update('error', t('statusBar.hubStartFailed'));
           });
+      } else if (!exec) {
+        new Notice(t('notices.cliNotFound'));
+      } else {
+        new Notice(t('notices.vaultPathUnavailable'));
       }
     }
   }

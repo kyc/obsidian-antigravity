@@ -179,6 +179,9 @@ interface InFlightHubStart {
   promise: Promise<string>;
 }
 
+/** How many trailing hub output chunks to retain for diagnostics. */
+const HUB_OUTPUT_TAIL_LINES = 50;
+
 export interface WaitForPortOptions {
   /** Port the hub is expected to start listening on. */
   port: number;
@@ -200,6 +203,7 @@ export class AgyHubManager {
   private inFlightStart: InFlightHubStart | null = null;
   private startMutex: Promise<void> = Promise.resolve();
   private killEscalation: KillEscalation | null = null;
+  private recentOutput: string[] = [];
 
   async startHub(
     agyExecutable: string,
@@ -265,6 +269,19 @@ export class AgyHubManager {
         stdio: ['ignore', 'pipe', 'pipe'],
       });
 
+      // The hub is a long-lived daemon that logs continuously. A 'pipe' stream
+      // is not drained automatically, so once the child writes past the OS
+      // pipe buffer (~64KB) it blocks inside write() and the hub stops
+      // serving requests while still holding the port. Both streams must be
+      // consumed; we keep a bounded tail for startup diagnostics.
+      this.recentOutput = [];
+      child.stdout?.on('data', this.captureOutput);
+      child.stderr?.on('data', this.captureOutput);
+      // If a stream is never given a 'data' listener it must at least be
+      // resumed, otherwise the same deadlock occurs.
+      child.stdout?.resume();
+      child.stderr?.resume();
+
       child.on('exit', () => {
         if (this.hubProcess === child) {
           this.hubProcess = null;
@@ -279,8 +296,12 @@ export class AgyHubManager {
       try {
         await this.waitForPort({ port, child, timeoutMs: 15000 });
       } catch (err) {
+        const detail = this.getRecentOutput();
         AgyProcess.killProcess(child);
-        throw err;
+        this.recentOutput = [];
+
+        const message = (err as Error).message;
+        throw new Error(detail ? `${message}\n${detail}` : message);
       }
 
       this.hubProcess = child;
@@ -360,6 +381,25 @@ export class AgyHubManager {
       this.killEscalation.cancel();
       this.killEscalation = null;
     }
+  }
+
+  /**
+   * Drains a hub output stream, retaining a bounded tail so a failed startup
+   * can report why. Bound as a listener so each chunk is consumed promptly.
+   */
+  private captureOutput = (chunk: Buffer): void => {
+    const text = chunk.toString('utf8').trim();
+    if (!text) return;
+
+    this.recentOutput.push(text);
+    if (this.recentOutput.length > HUB_OUTPUT_TAIL_LINES) {
+      this.recentOutput.splice(0, this.recentOutput.length - HUB_OUTPUT_TAIL_LINES);
+    }
+  };
+
+  /** Recent hub output, useful for diagnosing a failed start. */
+  getRecentOutput(): string {
+    return this.recentOutput.join('\n');
   }
 
   private getFreePort(): Promise<number> {

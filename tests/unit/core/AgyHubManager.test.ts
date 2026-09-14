@@ -1,3 +1,4 @@
+import { EventEmitter } from 'events';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -47,6 +48,108 @@ describe('AgyHubManager', () => {
   });
 
   describe('startHub', () => {
+    it('consumes hub stdout and stderr so a chatty daemon cannot deadlock', async () => {
+      const childProcess = require('child_process');
+      const stdout = new EventEmitter();
+      const stderr = new EventEmitter();
+      // resume() must be called even though listeners are attached, since a
+      // stream with no consumer blocks the child once the OS pipe fills.
+      (stdout as any).resume = jest.fn();
+      (stderr as any).resume = jest.fn();
+
+      const spawnSpy = jest.spyOn(childProcess, 'spawn').mockReturnValue({
+        on: jest.fn(),
+        kill: jest.fn(),
+        killed: false,
+        exitCode: null,
+        stdout,
+        stderr,
+      } as any);
+      jest.spyOn(hubManager as any, 'waitForPort').mockResolvedValue(undefined);
+
+      await hubManager.startHub('/bin/agy', '/test/vault', 42500, 'test-profile');
+
+      expect(stdout.listenerCount('data')).toBeGreaterThan(0);
+      expect(stderr.listenerCount('data')).toBeGreaterThan(0);
+      expect((stdout as any).resume).toHaveBeenCalled();
+      expect((stderr as any).resume).toHaveBeenCalled();
+
+      spawnSpy.mockRestore();
+    });
+
+    it('retains recent hub output and surfaces it when startup fails', async () => {
+      const childProcess = require('child_process');
+      const stdout = new EventEmitter();
+      const stderr = new EventEmitter();
+      (stdout as any).resume = jest.fn();
+      (stderr as any).resume = jest.fn();
+
+      const spawnSpy = jest.spyOn(childProcess, 'spawn').mockReturnValue({
+        on: jest.fn(),
+        kill: jest.fn(),
+        killed: false,
+        exitCode: null,
+        stdout,
+        stderr,
+      } as any);
+
+      // Hold the port wait open so the child exists and can log, mirroring the
+      // real 15s startup window in which agy writes its diagnostics.
+      let releaseWait: (err: Error) => void = () => {};
+      const waitGate = new Promise<never>((_, reject) => {
+        releaseWait = reject;
+      });
+      jest.spyOn(hubManager as any, 'waitForPort').mockReturnValue(waitGate);
+
+      const startPromise = hubManager.startHub('/bin/agy', '/test/vault', 42500, 'test-profile');
+
+      // Wait until spawn has happened and the listeners are attached.
+      while (stdout.listenerCount('data') === 0) {
+        await new Promise((r) => setImmediate(r));
+      }
+      stdout.emit('data', Buffer.from('auth required: visit the login URL\n'));
+
+      releaseWait(new Error('Timed out waiting for hub'));
+
+      const err = await startPromise.catch((e: Error) => e);
+      expect((err as Error).message).toContain('Timed out waiting for hub');
+      expect((err as Error).message).toContain('auth required: visit the login URL');
+
+      spawnSpy.mockRestore();
+    });
+
+    it('bounds retained hub output instead of growing without limit', async () => {
+      const childProcess = require('child_process');
+      const stdout = new EventEmitter();
+      const stderr = new EventEmitter();
+      (stdout as any).resume = jest.fn();
+      (stderr as any).resume = jest.fn();
+
+      const spawnSpy = jest.spyOn(childProcess, 'spawn').mockReturnValue({
+        on: jest.fn(),
+        kill: jest.fn(),
+        killed: false,
+        exitCode: null,
+        stdout,
+        stderr,
+      } as any);
+      jest.spyOn(hubManager as any, 'waitForPort').mockResolvedValue(undefined);
+
+      await hubManager.startHub('/bin/agy', '/test/vault', 42500, 'test-profile');
+
+      for (let i = 0; i < 500; i++) {
+        stdout.emit('data', Buffer.from(`log line ${i}\n`));
+      }
+
+      const retained = hubManager.getRecentOutput().split('\n');
+      expect(retained.length).toBeLessThanOrEqual(50);
+      // The most recent line is kept, the earliest is dropped.
+      expect(hubManager.getRecentOutput()).toContain('log line 499');
+      expect(hubManager.getRecentOutput()).not.toContain('log line 0\n');
+
+      spawnSpy.mockRestore();
+    });
+
     it('passes --agent flag when defaultAgent is specified', async () => {
       const childProcess = require('child_process');
       const spawnSpy = jest.spyOn(childProcess, 'spawn').mockImplementation(() => {

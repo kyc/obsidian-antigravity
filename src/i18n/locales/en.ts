@@ -132,6 +132,7 @@ export default {
   'statusBar.tooltipReady': 'Antigravity: Ready. Click to open menu.',
   'statusBar.menuStopTask': 'Stop active task',
   'statusBar.menuOpenHub': 'Open assistant web hub view',
+  'statusBar.hubStartFailed': 'Hub start failed',
 
   // General Notices & Progress
   'notices.taskStopped': 'Antigravity task stopped.',
@@ -146,4 +147,6 @@ export default {
   'notices.taskCancelledError': 'Antigravity task was cancelled.',
   'notices.processExitError': 'Antigravity process exited with code {code}',
   'notices.rulesPathInvalid': "[Antigravity] Invalid rules path '{rulesRelPath}' is outside the vault. Falling back to default 'AGENTS.md'.",
+  'notices.hubAutoStartFailed': '[Antigravity] Could not auto-start the hub: {error}',
+  'notices.vaultPathUnavailable': 'Could not determine the vault path. The hub was not started.',
 } as const;

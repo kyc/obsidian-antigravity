@@ -134,6 +134,7 @@ const zhTw: LocaleDictionary = {
   'statusBar.tooltipReady': 'Antigravity：就緒。點選開啟選單。',
   'statusBar.menuStopTask': '停止目前任務',
   'statusBar.menuOpenHub': '開啟 Assistant Web Hub 檢視',
+  'statusBar.hubStartFailed': 'Hub 啟動失敗',
 
   // General Notices & Progress
   'notices.taskStopped': 'Antigravity 任務已停止。',
@@ -148,6 +149,8 @@ const zhTw: LocaleDictionary = {
   'notices.taskCancelledError': 'Antigravity 任務已取消。',
   'notices.processExitError': 'Antigravity 程序結束，結束代碼 {code}',
   'notices.rulesPathInvalid': "[Antigravity] 無效的規則路徑 '{rulesRelPath}' 超出庫範圍。已回退至預設 'AGENTS.md'。",
+  'notices.hubAutoStartFailed': '[Antigravity] 無法自動啟動 Hub：{error}',
+  'notices.vaultPathUnavailable': '無法確定庫路徑，Hub 未啟動。',
 };
 
 export default zhTw;
