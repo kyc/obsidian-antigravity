@@ -37,7 +37,7 @@ All commands follow Obsidian's sentence case standard:
 In **Settings > Antigravity**:
 
 1. **Antigravity binary path**: Auto-detects `agy` in `~/.local/bin`, `/usr/local/bin`, or user PATH. Provides a **Verify binary** button to test execution.
-2. **Default model**: Select model ID passed to `agy` (e.g. `gemini-3.8-flash`, `gemini-3.8-pro`, `gemini-3.8-flash-high`, `gemini-3.8-pro-high`).
+2. **Default model**: Select model ID passed to `agy` (e.g. `gemini-3.8-flash-high`, `gemini-3.8-flash-medium`, `gemini-3.8-flash-low`, `gemini-3.7-flash-high`, `gemini-3.1-pro-high`, `claude-sonnet-4-6`).
 3. **Reasoning effort**: Configure reasoning intensity (`none`, `low`, `medium`, `high`).
 4. **Default agent**: Specify default agent persona (default: `omarchy-vault`).
 5. **Assistant hub**:

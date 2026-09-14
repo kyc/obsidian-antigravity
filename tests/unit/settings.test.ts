@@ -60,7 +60,7 @@ describe('validateSettings', () => {
 
   it('preserves valid custom fields while falling back on invalid fields', () => {
     const raw = {
-      model: 'gemini-3.8-pro',
+      model: 'gemini-3.1-pro-high',
       effort: 'INVALID',
       hubPort: 'not-a-number',
       cliPath: '  /usr/local/bin/agy  ',
@@ -68,7 +68,7 @@ describe('validateSettings', () => {
     };
 
     const validated = validateSettings(raw);
-    expect(validated.model).toBe('gemini-3.8-pro');
+    expect(validated.model).toBe('gemini-3.1-pro-high');
     expect(validated.effort).toBe('none');
     expect(validated.hubPort).toBe(0);
     expect(validated.cliPath).toBe('/usr/local/bin/agy');

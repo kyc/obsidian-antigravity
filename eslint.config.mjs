@@ -13,12 +13,12 @@ export default defineConfig([
         },
         rules: {
             "obsidianmd/ui/sentence-case": ["warn", {
-                brands: ["Obsidian", "Antigravity", "Gemini", "GitHub"],
+                brands: ["Obsidian", "Antigravity", "Gemini", "GitHub", "Claude", "Sonnet", "GPT"],
                 acronyms: ["API", "URL", "HTML", "MOC", "CLI", "IDE", "YAML", "NDJSON", "HTTP", "TCP", "ID"],
                 enforceCamelCaseLower: true,
             }],
             "obsidianmd/ui/sentence-case-locale-module": ["warn", {
-                brands: ["Obsidian", "Antigravity", "Gemini", "GitHub"],
+                brands: ["Obsidian", "Antigravity", "Gemini", "GitHub", "Claude", "Sonnet", "GPT"],
                 acronyms: ["API", "URL", "HTML", "MOC", "CLI", "IDE", "YAML", "NDJSON", "HTTP", "TCP", "ID"],
             }],
         },

@@ -57,7 +57,7 @@ export class VaultTaskRunner {
 
     const formattedPrompt = this.vaultContext.formatPromptWithContext(options.prompt, options.context);
 
-    const model = options.model || settings.model || 'gemini-3.8-flash';
+    const model = options.model || settings.model || 'gemini-3.8-flash-high';
     const effort = options.effort || settings.effort || 'none';
 
     const args: string[] = [

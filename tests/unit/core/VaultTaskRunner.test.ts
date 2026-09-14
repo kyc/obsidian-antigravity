@@ -18,7 +18,7 @@ describe('VaultTaskRunner', () => {
     } as any;
     mockSettings = {
       enableVaultRules: false,
-      model: 'gemini-3.8-flash',
+      model: 'gemini-3.8-flash-high',
       effort: 'none',
       hubProfile: 'antigravity-obsidian',
       customRulesPath: 'AGENTS.md',

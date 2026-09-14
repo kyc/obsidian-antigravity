@@ -15,7 +15,7 @@ export interface AntigravityPluginSettings {
 
 export const DEFAULT_SETTINGS: AntigravityPluginSettings = {
   cliPath: '',
-  model: 'gemini-3.8-flash',
+  model: 'gemini-3.8-flash-high',
   effort: 'none',
   hubPort: 0,
   autoStartHub: false,
