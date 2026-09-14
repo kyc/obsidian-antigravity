@@ -109,8 +109,8 @@ describe('AgyHubManager', () => {
       let releaseA: () => void;
       const waitPromiseA = new Promise<void>((r) => { releaseA = r; });
 
-      jest.spyOn(hubManager as any, 'waitForPort').mockImplementation((child: any, port: number) => {
-        if (port === 41001) {
+      jest.spyOn(hubManager as any, 'waitForPort').mockImplementation((opts: { port: number }) => {
+        if (opts.port === 41001) {
           return waitPromiseA;
         }
         return Promise.resolve();

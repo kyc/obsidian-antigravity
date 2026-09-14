@@ -5,7 +5,7 @@ import * as http from 'http';
 import * as net from 'net';
 import * as os from 'os';
 import * as path from 'path';
-import { AgyProcess } from './AgyProcess';
+import { AgyProcess, KillEscalation } from './AgyProcess';
 
 export function sanitizeProfile(profile: string): string {
   if (!profile || typeof profile !== 'string') {
@@ -179,6 +179,18 @@ interface InFlightHubStart {
   promise: Promise<string>;
 }
 
+export interface WaitForPortOptions {
+  /** Port the hub is expected to start listening on. */
+  port: number;
+  /** Maximum time to wait before rejecting. Defaults to 15000ms. */
+  timeoutMs?: number;
+  /**
+   * Process to monitor for early exit while waiting. Defaults to the manager's
+   * current hub process; pass null to wait on the port alone.
+   */
+  child?: ChildProcess | null;
+}
+
 export class AgyHubManager {
   private hubProcess: ChildProcess | null = null;
   private port: number | null = null;
@@ -187,6 +199,7 @@ export class AgyHubManager {
   private currentProjectId: string | null = null;
   private inFlightStart: InFlightHubStart | null = null;
   private startMutex: Promise<void> = Promise.resolve();
+  private killEscalation: KillEscalation | null = null;
 
   async startHub(
     agyExecutable: string,
@@ -264,7 +277,7 @@ export class AgyHubManager {
 
       // Wait until server starts accepting connections
       try {
-        await this.waitForPort(child, port, 15000);
+        await this.waitForPort({ port, child, timeoutMs: 15000 });
       } catch (err) {
         AgyProcess.killProcess(child);
         throw err;
@@ -330,13 +343,22 @@ export class AgyHubManager {
   }
 
   stopHub(): void {
+    this.clearKillEscalation();
     if (this.hubProcess) {
-      AgyProcess.killProcess(this.hubProcess);
+      this.killEscalation = AgyProcess.killProcess(this.hubProcess);
       this.hubProcess = null;
       this.port = null;
       this.currentProfile = null;
       this.currentProjectId = null;
       this.vaultPath = null;
+    }
+  }
+
+  /** Cancels the pending SIGKILL escalation timer, if any. */
+  private clearKillEscalation(): void {
+    if (this.killEscalation) {
+      this.killEscalation.cancel();
+      this.killEscalation = null;
     }
   }
 
@@ -352,20 +374,8 @@ export class AgyHubManager {
     });
   }
 
-  protected async waitForPort(target: ChildProcess | number, portOrTimeout?: number, maybeTimeout?: number): Promise<void> {
-    let child: ChildProcess | null = null;
-    let port: number;
-    let timeoutMs: number;
-
-    if (typeof target === 'number') {
-      port = target;
-      timeoutMs = portOrTimeout ?? 15000;
-      child = this.hubProcess;
-    } else {
-      child = target;
-      port = portOrTimeout ?? 0;
-      timeoutMs = maybeTimeout ?? 15000;
-    }
+  protected async waitForPort(options: WaitForPortOptions): Promise<void> {
+    const { port, timeoutMs = 15000, child = this.hubProcess } = options;
 
     const startTime = Date.now();
     while (Date.now() - startTime < timeoutMs) {
