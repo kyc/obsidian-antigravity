@@ -1,0 +1,172 @@
+/* Obsidian Antigravity Plugin Styles */
+
+/* Status Bar */
+.antigravity-status-bar-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  padding: 0 4px;
+}
+
+.antigravity-status-bar-item:hover {
+  color: var(--text-accent);
+}
+
+.antigravity-status-spinner {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--text-muted);
+  border-top-color: var(--text-accent);
+  border-radius: 50%;
+  animation: antigravity-spin 0.8s linear infinite;
+}
+
+@keyframes antigravity-spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+/* Hub Webview View */
+.workspace-leaf-content[data-type='antigravity-hub-view'] .view-content.antigravity-hub-view-container,
+.antigravity-hub-view-container {
+  padding: 0;
+  padding-bottom: max(var(--safe-area-inset-bottom, 0px), var(--status-bar-height, 38px));
+  margin: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  width: 100%;
+  box-sizing: border-box;
+  background-color: var(--background-primary);
+}
+
+.workspace-split.mod-root .workspace-leaf-content[data-type='antigravity-hub-view'] .view-content.antigravity-hub-view-container,
+.workspace-split.mod-root .antigravity-hub-view-container {
+  padding-bottom: 0;
+}
+
+.antigravity-hub-iframe {
+  flex: 1 1 0%;
+  min-height: 0;
+  width: 100%;
+  height: 100%;
+  border: none;
+  background-color: var(--background-primary);
+  box-sizing: border-box;
+}
+
+.antigravity-hub-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  gap: 12px;
+  color: var(--text-muted);
+}
+
+/* Task Modal */
+.antigravity-task-modal {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.antigravity-task-context-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background-color: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.antigravity-task-context-badge strong {
+  color: var(--text-normal);
+}
+
+.antigravity-task-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.antigravity-preset-chip {
+  cursor: pointer;
+  background-color: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 12px;
+  padding: 4px 10px;
+  font-size: 0.8rem;
+  transition: all 0.15s ease;
+}
+
+.antigravity-preset-chip:hover {
+  background-color: var(--interactive-accent);
+  color: var(--text-on-accent);
+  border-color: var(--interactive-accent);
+}
+
+.antigravity-task-textarea {
+  width: 100%;
+  min-height: 110px;
+  font-family: inherit;
+  font-size: 0.95rem;
+  padding: 10px;
+  resize: vertical;
+  border-radius: 6px;
+  border: 1px solid var(--background-modifier-border);
+  background-color: var(--background-secondary);
+  color: var(--text-normal);
+}
+
+.antigravity-task-textarea:focus {
+  border-color: var(--interactive-accent);
+}
+
+.antigravity-task-textarea:focus-visible {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: 1px;
+}
+
+/* Result Modal */
+.antigravity-result-modal-content {
+  max-height: 480px;
+  overflow-y: auto;
+  background-color: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  padding: 14px 18px;
+  font-size: 0.95rem;
+  line-height: 1.6;
+  word-break: break-word;
+}
+
+.antigravity-risk-banner {
+  background-color: var(--background-modifier-error-hover);
+  color: var(--text-error);
+  border: 1px solid var(--text-error);
+  padding: 8px 12px;
+  border-radius: 4px;
+  font-size: var(--font-ui-smaller);
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Confirm Modal */
+.antigravity-confirm-modal {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+

@@ -1,0 +1,39 @@
+{
+  "name": "obsidian-antigravity",
+  "version": "1.0.0",
+  "description": "Obsidian plugin for autonomous vault management and intelligence powered by Google Antigravity (agy)",
+  "main": "main.js",
+  "scripts": {
+    "dev": "node esbuild.config.mjs",
+    "build": "node esbuild.config.mjs production",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src/",
+    "test": "jest"
+  },
+  "keywords": [
+    "antigravity",
+    "agy",
+    "obsidian",
+    "obsidian-plugin",
+    "vault-management",
+    "agent"
+  ],
+  "author": "keyongcheng",
+  "license": "MIT",
+  "repository": "kyc/obsidian-antigravity",
+  "devDependencies": {
+    "@types/cross-spawn": "^6.0.6",
+    "@types/jest": "^30.0.0",
+    "@types/node": "^25.5.2",
+    "esbuild": "^0.28.1",
+    "eslint": "^10.8.1",
+    "eslint-plugin-obsidianmd": "^0.4.1",
+    "jest": "^30.3.0",
+    "obsidian": "1.13.0",
+    "ts-jest": "^29.4.9",
+    "typescript": "^6.0.2"
+  },
+  "dependencies": {
+    "cross-spawn": "^7.0.6"
+  }
+}
