@@ -13,23 +13,38 @@ Obsidian Antigravity Plugin
 
 const prod = process.argv[2] === 'production';
 
-const VAULT_PLUGIN_DIR = process.env.OBSIDIAN_PLUGIN_PATH || 
-  path.join(process.env.HOME || '/home/kyc', 'Obsidians/Omarchy-Desktop/.obsidian/plugins/antigravity');
+// Where to mirror the built plugin for local testing. Only meaningful on a
+// developer machine; CI sets neither variable and the copy step is skipped.
+const VAULT_PLUGIN_DIR = process.env.OBSIDIAN_PLUGIN_PATH || '';
 
 const copyToVaultPlugin = {
   name: 'copy-to-vault',
   setup(build) {
     build.onEnd((result) => {
       if (result.errors.length > 0) return;
-      if (!existsSync(VAULT_PLUGIN_DIR)) {
-        mkdirSync(VAULT_PLUGIN_DIR, { recursive: true });
+
+      if (!VAULT_PLUGIN_DIR) {
+        console.log('OBSIDIAN_PLUGIN_PATH not set; skipping vault sync.');
+        return;
       }
-      for (const file of ['main.js', 'manifest.json', 'styles.css']) {
-        if (existsSync(file)) {
-          copyFileSync(file, path.join(VAULT_PLUGIN_DIR, file));
+
+      // Syncing is a developer convenience. A failure here must not fail the
+      // build, because the bundle in the repo root is already complete and is
+      // what the release workflow publishes.
+      try {
+        if (!existsSync(VAULT_PLUGIN_DIR)) {
+          mkdirSync(VAULT_PLUGIN_DIR, { recursive: true });
         }
+        for (const file of ['main.js', 'manifest.json', 'styles.css']) {
+          if (existsSync(file)) {
+            copyFileSync(file, path.join(VAULT_PLUGIN_DIR, file));
+          }
+        }
+        console.log(`Synced plugin files to ${VAULT_PLUGIN_DIR}`);
+      } catch (err) {
+        console.warn(`Could not sync to ${VAULT_PLUGIN_DIR}: ${err.message}`);
+        console.warn('The build output in the repository root is still valid.');
       }
-      console.log(`Synced plugin files to ${VAULT_PLUGIN_DIR}`);
     });
   },
 };
@@ -68,7 +83,14 @@ const context = await esbuild.context({
 });
 
 if (prod) {
-  await context.rebuild();
+  const result = await context.rebuild();
+  await context.dispose();
+
+  if (result.errors.length > 0) {
+    console.error(`Build failed with ${result.errors.length} error(s).`);
+    process.exit(1);
+  }
+  console.log('Build complete: main.js');
   process.exit(0);
 } else {
   await context.watch();

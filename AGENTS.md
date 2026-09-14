@@ -12,7 +12,7 @@ The plugin is completely decoupled from legacy multi-provider frameworks, focusi
 npm run typecheck    # Verify TypeScript types
 npm run lint         # Lint codebase with eslint-plugin-obsidianmd
 npm test         # Run Jest unit test suite (8 suites, 60 tests)
-npm run build        # Production bundle to main.js and sync to vault
+npm run build        # Production bundle to main.js (mirrors to vault only if OBSIDIAN_PLUGIN_PATH is set)
 npm run dev          # Watch mode with automatic rebuild
 ```
 

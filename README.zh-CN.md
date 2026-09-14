@@ -37,7 +37,7 @@ npm install
 npm run build
 ```
 
-`npm run build` 会把打包产物输出到仓库根目录，并同步到 `$OBSIDIAN_PLUGIN_PATH` 指定的库中，该变量默认值为 `~/Obsidians/Omarchy-Desktop/.obsidian/plugins/antigravity`。设置该环境变量即可指定其他库。
+`npm run build` 会将打包产物输出为仓库根目录的 `main.js`。若设置了 `OBSIDIAN_PLUGIN_PATH`，还会额外把三个插件文件镜像到该目录——这在对照实际库测试时很有用。未设置该变量时会跳过同步；同步失败仅给出警告，不会导致构建失败。
 
 ---
 

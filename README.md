@@ -37,7 +37,7 @@ npm install
 npm run build
 ```
 
-`npm run build` writes the bundle to the repository root and copies it into the vault at `$OBSIDIAN_PLUGIN_PATH`, defaulting to `~/Obsidians/Omarchy-Desktop/.obsidian/plugins/antigravity`. Override that variable to target a different vault.
+`npm run build` writes the bundle to `main.js` in the repository root. Setting `OBSIDIAN_PLUGIN_PATH` additionally mirrors the three plugin files into that directory, which is useful for testing against a live vault. The sync is skipped when the variable is unset, and a failed copy warns without failing the build.
 
 ---
 
