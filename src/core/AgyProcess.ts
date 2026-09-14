@@ -9,6 +9,11 @@ export interface SpawnSpec {
   env?: Record<string, string>;
 }
 
+/** Handle for cancelling a pending SIGKILL escalation timer. */
+export interface KillEscalation {
+  cancel(): void;
+}
+
 export class AgyProcess {
   static getEnrichedEnv(additionalEnv: Record<string, string> = {}): NodeJS.ProcessEnv {
     const env = { ...process.env, ...additionalEnv };
@@ -43,21 +48,41 @@ export class AgyProcess {
     return child;
   }
 
-  static killProcess(child: ChildProcess | null): void {
-    if (!child || child.killed) return;
+  /**
+   * Sends SIGTERM, escalating to SIGKILL after a grace period when the process
+   * has not exited. The returned handle cancels the escalation timer, so callers
+   * (and tests) can release it instead of leaving a dangling timer behind.
+   */
+  static killProcess(child: ChildProcess | null): KillEscalation {
+    const noop: KillEscalation = { cancel: () => {} };
+    if (!child || child.killed) return noop;
+
     try {
       child.kill('SIGTERM');
-      window.setTimeout(() => {
-        if (!child.killed) {
-          try {
-            child.kill('SIGKILL');
-          } catch {
-            // Ignore
-          }
-        }
-      }, 2000);
     } catch {
-      // Ignore kill error
+      return noop;
     }
+
+    const timer = window.setTimeout(() => {
+      if (!child.killed) {
+        try {
+          child.kill('SIGKILL');
+        } catch {
+          // Ignore
+        }
+      }
+    }, 2000);
+
+    // The escalation is a best-effort backstop, so it must never keep the host
+    // process alive on its own account.
+    if (typeof timer === 'object' && timer !== null && 'unref' in timer) {
+      (timer as { unref: () => void }).unref();
+    }
+
+    return {
+      cancel: () => {
+        window.clearTimeout(timer);
+      },
+    };
   }
 }

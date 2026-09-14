@@ -25,11 +25,13 @@ describe('VaultTaskRunner', () => {
       allowUnrestrictedTasks: false,
       unrestrictedConfirmed: false,
     };
-    runner = new VaultTaskRunner(mockApp, mockVaultContext, () => mockSettings);
+    runner = new VaultTaskRunner(mockVaultContext, () => mockSettings);
   });
 
   afterEach(() => {
+    runner.dispose();
     jest.restoreAllMocks();
+    jest.useRealTimers();
   });
 
   it('spawns agy in --print mode with approval mode by default (no permission bypass)', async () => {
@@ -209,8 +211,8 @@ describe('VaultTaskRunner', () => {
     fakeChild2.stderr = new EventEmitter();
 
     const statusUpdates: Array<{ state: string; text?: string }> = [];
+    runner.dispose();
     runner = new VaultTaskRunner(
-      mockApp,
       mockVaultContext,
       () => mockSettings,
       (state, text) => {

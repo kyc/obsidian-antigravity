@@ -1,5 +1,5 @@
 import { ChildProcess } from 'child_process';
-import { App, Notice } from 'obsidian';
+import { Notice } from 'obsidian';
 import { AgyProcess } from './AgyProcess';
 import { VaultContext } from './VaultContext';
 import { t } from '../i18n';
@@ -19,12 +19,15 @@ interface ActiveTaskRun {
   resolve: (result: string) => void;
 }
 
+/** How long an error state stays visible before reverting to idle. */
+const ERROR_STATE_RESET_MS = 6000;
+
 export class VaultTaskRunner {
   private nextRunId = 0;
   private currentRun: ActiveTaskRun | null = null;
+  private statusResetTimer: number | null = null;
 
   constructor(
-    private _app: App,
     private vaultContext: VaultContext,
     private getSettings: () => AntigravityPluginSettings,
     private onStatusChange?: (state: 'idle' | 'running' | 'error', text?: string) => void,
@@ -186,12 +189,7 @@ export class VaultTaskRunner {
           const isCurrent = this.currentRun?.runId === runId;
           if (isCurrent) {
             this.currentRun = null;
-            this.updateStatus('error', err.message);
-            window.setTimeout(() => {
-              if (this.currentRun === null) {
-                this.updateStatus('idle');
-              }
-            }, 6000);
+            this.setErrorStatus(err.message);
           }
           reject(err);
         });
@@ -222,12 +220,7 @@ export class VaultTaskRunner {
             const errorMsg = terminalError || t('notices.processExitError', { code });
             if (isCurrent) {
               this.currentRun = null;
-              this.updateStatus('error', errorMsg);
-              window.setTimeout(() => {
-                if (this.currentRun === null) {
-                  this.updateStatus('idle');
-                }
-              }, 6000);
+              this.setErrorStatus(errorMsg);
             }
             reject(new Error(errorMsg));
           }
@@ -235,12 +228,7 @@ export class VaultTaskRunner {
       } catch (err) {
         if (this.currentRun?.runId === runId) {
           this.currentRun = null;
-          this.updateStatus('error', (err as Error).message);
-          window.setTimeout(() => {
-            if (this.currentRun === null) {
-              this.updateStatus('idle');
-            }
-          }, 6000);
+          this.setErrorStatus((err as Error).message);
         }
         reject(err instanceof Error ? err : new Error(String(err)));
       }
@@ -262,8 +250,37 @@ export class VaultTaskRunner {
     run.reject(new Error(t('notices.taskCancelledError')));
   }
 
+  /** Releases pending timers. Safe to call on plugin unload. */
+  dispose(): void {
+    this.clearStatusResetTimer();
+  }
+
   private updateStatus(state: 'idle' | 'running' | 'error', text?: string): void {
+    this.clearStatusResetTimer();
     this.onStatusChange?.(state, text);
+  }
+
+  /** Cancels any pending error-state reset. */
+  private clearStatusResetTimer(): void {
+    if (this.statusResetTimer !== null) {
+      window.clearTimeout(this.statusResetTimer);
+      this.statusResetTimer = null;
+    }
+  }
+
+  /**
+   * Transitions to the error state and schedules a revert to idle. The timer is
+   * held so a later status change (e.g. a new run starting) cancels it rather
+   * than letting a stale reset overwrite fresher state.
+   */
+  private setErrorStatus(message: string): void {
+    this.updateStatus('error', message);
+    this.statusResetTimer = window.setTimeout(() => {
+      this.statusResetTimer = null;
+      if (this.currentRun === null) {
+        this.updateStatus('idle');
+      }
+    }, ERROR_STATE_RESET_MS);
   }
 
   private handleStreamEvent(event: StreamEvent, emit: (event: TaskProgressEvent) => void): void {

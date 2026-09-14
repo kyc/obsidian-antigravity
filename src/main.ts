@@ -40,7 +40,6 @@ export default class AntigravityPlugin extends Plugin {
 
     // Initialize Task Runner for headless tasks
     this.taskRunner = new VaultTaskRunner(
-      this.app,
       this.vaultContext,
       () => this.settings,
       (state, text) => {
@@ -191,6 +190,7 @@ export default class AntigravityPlugin extends Plugin {
     this.hubManager.stopHub();
     if (this.taskRunner) {
       this.taskRunner.abort();
+      this.taskRunner.dispose();
     }
   }
 
