@@ -85,6 +85,6 @@ Unit tests mirror `src/` under `tests/unit/`.
 
 ## Reference Documentation
 
-- Detailed architecture, reverse engineering findings, and historical decisions are documented in [docs/ARCHITECTURE_AND_DEV_NOTES.md](file:///home/kyc/Work/obsidian-antigravity/docs/ARCHITECTURE_AND_DEV_NOTES.md).
-- Investigation of official Antigravity Hub contracts is documented in [docs/HUB_CAPABILITY_BOUNDARIES.md](file:///home/kyc/Work/obsidian-antigravity/docs/HUB_CAPABILITY_BOUNDARIES.md).
-- Historical audit and resolution tracking is documented in [docs/CODE_REVIEW_2026-09.md](file:///home/kyc/Work/obsidian-antigravity/docs/CODE_REVIEW_2026-09.md).
+- Detailed architecture, reverse engineering findings, and historical decisions are documented in [docs/ARCHITECTURE_AND_DEV_NOTES.md](./docs/ARCHITECTURE_AND_DEV_NOTES.md).
+- Investigation of official Antigravity Hub contracts is documented in [docs/HUB_CAPABILITY_BOUNDARIES.md](./docs/HUB_CAPABILITY_BOUNDARIES.md).
+- Historical audit and resolution tracking is documented in [docs/CODE_REVIEW_2026-09.md](./docs/CODE_REVIEW_2026-09.md).

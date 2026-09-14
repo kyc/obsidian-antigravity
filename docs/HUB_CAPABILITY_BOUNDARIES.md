@@ -1,5 +1,10 @@
 # Antigravity Hub 能力边界调查报告
 
+> [!NOTE]
+> **调查结论有效，但 §5 的「链路去留」已于后续定型。**
+>
+> 本报告的 Hub 契约逆向（§1–§4）仍然准确且是当前实现的依据。但 §5 写作时三条链路都还在讨论中；此后**定案为 Hub + Task 双轨**：Chat 轨已彻底删除，Task 轨已完整接线并成为唯一的「带指令执行」通道，Hub 轨保留为完整能力入口。阅读 §5 时请以本说明为准，§6 的待验证事项中第 1、2 条至今仍未实测。
+
 > 调查日期：2026-09
 > 调查对象：`agy` v1.2.2（CLI）+ `google.google-antigravity` v1.3.0（VS Code 扩展）
 > 调查动因：`agy --hub` 属未公开机制（`agy --help` 中无此参数），需从官方扩展反推真实契约，以判定插件三条链路的去留
@@ -19,7 +24,7 @@
 | 能否用 URL 预填 prompt | **不能**。URL 只能指定路由与工作区，注入上下文必须走 WebSocket RPC |
 | 插件能否复用该 RPC | **理论上可以，但代价高**：需实现 protobuf schema + WebSocket 握手，且依赖未公开协议 |
 
-**对三条链路去留的影响**：Hub 轨是唯一能拿到官方完整能力的通道；Chat 轨受 `agy` CLI 的 `stream-json` 能力边界限制（用户已实测并放弃）；Task 轨从未接线。**Hub 无法通过 URL 预填 prompt** 这一点，直接决定了「其他命令改为唤起 Hub 执行」的方案不可行——详见 §5。
+**对三条链路去留的影响**：Hub 轨是唯一能拿到官方完整能力的通道；Chat 轨受 `agy` CLI 的 `stream-json` 能力边界限制（用户已实测并放弃，该轨后续已删除）；Task 轨现为唯一的「带指令执行」通道。**Hub 无法通过 URL 预填 prompt** 这一点，直接决定了「其他命令改为唤起 Hub 执行」的方案不可行——详见 §5。这也正是 Task 轨必须保留的根本原因。
 
 ---
 
@@ -96,18 +101,16 @@ if (workspaceFolder) {
 
 ### 2.4 附带发现：探测残留需清理
 
-`~/.gemini/config/projects/` 下存在两个无效注册文件（**本次调查的残留**，指向不存在的路径）：
+`~/.gemini/config/projects/` 下曾存在本次调查遗留的无效注册文件（指向不存在的路径）：
 
 | 文件 | 内容 | 状态 |
 | :--- | :--- | :--- |
-| `probe-project.json` | `file:///tmp/agyprobe` | 待清理 |
-| `obsidian-vault.json` | `file:///test/vault` | 待清理 |
+| `probe-project.json` | `file:///tmp/agyprobe` | ✅ 已清理 |
+| `obsidian-vault.json` | `file:///test/vault` | ✅ 已清理 |
+| `obsidian-vault-709105e4.json` | `file:///test/vault` | ✅ 已清理 |
+| `obsidian-omarchy-desktop.json` | 无哈希的旧格式 ID | ✅ 已清理 |
 
-备份位于 `/tmp/agy-probe-backup/`。因 `~/.gemini` 在工作区之外（沙箱只读），未能自动删除，**需用户手动清理**：
-
-```bash
-rm ~/.gemini/config/projects/{probe-project.json,obsidian-vault.json}
-```
+清理于 2026-09 完成。**注意**：这些文件的 `id` 字段与文件名不一致（例如 `obsidian-vault.json` 内 `"id": "obsidian-vault"`），说明它们由早期版本直接构造 id 而产生，而非当前 `ensureVaultProject` 的哈希命名。若后续再次运行探测脚本，须复查此目录。
 
 ---
 
@@ -119,9 +122,10 @@ rm ~/.gemini/config/projects/{probe-project.json,obsidian-vault.json}
 | 优势 | 精确、无网络开销、能捕获认证 URL | 无需解析 stdout |
 | 风险 | — | 若服务已监听但 SPA 未就绪，可能过早渲染 iframe |
 
-插件方案（`AgyHubManager.waitForPort`）本身**是合理的**，且带进程存活检查：
+插件方案（`AgyHubManager.waitForPort`）本身**是合理的**，且带进程存活检查（重构后签名已改为命名参数对象 `WaitForPortOptions`）：
 ```ts
-if (this.hubProcess?.killed || this.hubProcess?.exitCode !== null) {
+// waitForPort({ port, child, timeoutMs })
+if (child && (child.killed || child.exitCode !== null)) {
   throw new Error('Antigravity hub process exited unexpectedly during startup.');
 }
 ```
@@ -182,32 +186,35 @@ terminal-standalone         终端
 
 ## 5. 对三条链路去留的影响
 
-### 5.1 Hub 轨（唯一保留项）
+> **后续定型**：本节写于三条链路并存时期。定案结果是 **Hub + Task 双轨**——Chat 轨已删除，Task 轨已接线。以下各节保留原始分析以记录判断依据。
+
+### 5.1 Hub 轨（保留）
 
 **能力边界**：
 - ✅ 完整官方 UI：思维链、Tool Call 卡片、Artifacts、多 Agent
 - ✅ 工作区隔离（通过 `--app_data_dir`，比官方更干净）
 - ✅ 主题跟随（`hostTheme`）
 - ❌ 无法从插件侧预填 prompt / 注入上下文（除非实现 WebSocket RPC）
-- ❌ 不响应 vault CSS Snippets（文档 §7.2 第 3 条已承认）
+- ❌ 不响应 vault CSS Snippets（已知妥协）
 - ❌ 跨窗口拖拽会重载（同上）
 
-### 5.2 Chat 轨（用户已放弃）
+### 5.2 Chat 轨（已删除）
 
 用户原话：**「plugin 开始是走 chat 路线的，但 chat 因为 agy cli 的天然限制，能力边际非常有限所以放弃了」**
 
 本次调查**佐证了这一判断**：`agy --help` 显示 CLI 的 `stream-json` 模式能力有限（无官方前端的路由/会话管理/Artifacts/多 Agent 协同）。Chat 轨本质是用 CLI 子集重实现官方 SPA 的极简版，上限天然受 CLI 制约。
 
-**修正我此前的错误建议**：我曾建议「先修 Chat 轨的历史持久化」。**该建议是错的**——对一个已决策放弃的轨道做体验优化没有意义。正确做法是维持现状或删除，而非投入改进。
+**修正我此前的错误建议**：我曾建议「先修 Chat 轨的历史持久化」。**该建议是错的**——对一个已决策放弃的轨道做体验优化没有意义。
 
-### 5.3 Task 轨（从未接线）
+**最终处置**：`AgySession.ts` 与 `ChatView.ts` 已从代码库删除，相关 CSS 亦已移除。下方 §5.3 描述的「Task 轨转投 Chat 轨」状态不复存在。
 
-`VaultTaskRunner.runTask()` 仅测试调用，`ResultModal` 零引用，`TaskModal` 转投 Chat 轨。
+### 5.3 Task 轨（已接线）
 
-**关键约束**：由于 §4.2 证实 **Hub 无法经 URL 预填 prompt**，原设想的「把 `fix-links` 等命令改为唤起 Hub 执行」**不可行**——Hub 只能被打开，无法带上指令。这些命令若要保留「一键执行」语义，只能：
-- 继续走 Chat 轨的 `stream-json`（即现状），或
-- 实现 Hub 的 WebSocket RPC 注入（§6 待评估），或
-- 删除命令，Hub 内手动操作
+> **原始记录**：本节写作时 `VaultTaskRunner.runTask()` 仅被测试调用，`ResultModal` 零引用，`TaskModal` 转投 Chat 轨。
+
+**当前状态**：此问题已作为代码评审 §3.1 的完成度缺口被修复。`TaskModal.onSubmit` 现直接调用 `taskRunner.runTask()`，结果经 `ResultModal` 展示。Task 轨是插件唯一的「带指令执行」通道。
+
+**关于「Hub 无法预填 prompt」的约束仍然成立**：§4.2 证实 Hub 只能被打开、无法带上指令。因此 `fix-links` 等一键命令**只能**继续走 `agy --print`（即 Task 轨现状），除非未来实现 Hub 的 WebSocket RPC 注入（§6 待评估）。这条约束是 Task 轨必须保留的根本原因。
 
 ---
 
@@ -234,15 +241,13 @@ terminal-standalone         终端
 
 ## 7. 建议的下一步
 
-**不要急于删代码**。建议顺序：
+**§6.1 与 §6.2 两个实验至今未做**（各约 10 分钟）——它们决定 `AgyHubManager` 能否进一步简化：
 
-1. **先做 §6.1 与 §6.2 两个实验**（各约 10 分钟）——它们决定 Hub 能否完全替代另外两轨：
-   - 若实验 2 成功（RPC 可用）→ Hub 可完全替代 Chat 轨，且能实现 prompt 预填 → 可安全删除 Chat + Task 轨
-   - 若实验 2 失败 → Hub 无注入能力 → 需重新权衡：是接受「只能打开 Hub 手动操作」，还是保留 Chat 轨的 `stream-json` 作为唯一的「带指令执行」通道
+1. **若实验 1 成功**（`workspaceUri` 可替代 `?section=`）→ 可移除 `ensureVaultProject` / `ensureDefaultProjectId` 及项目 ID 碰撞风险，`AgyHubManager` 大幅简化。
+2. **若实验 2 成功**（`useWebSocket=true` + `extensionView=true` 在 iframe 下可用）→ 可拿到官方 RPC 通道，从而支持 prompt 预填与上下文注入，Task 轨的存在必要性需重新评估。
+3. **若实验 3 成功**（`ANTIGRAVITY_OPEN_URL:` 信号可靠）→ 可替换 `waitForPort` 轮询，并支持认证流程引导。
 
-2. **据实验结果再定去留**，而非现在决策。
-
-3. 无论结果如何，`AgyHubManager` 的三个已确证缺陷（并发竞态、路径穿越、ID 碰撞）都应修复——尤其若实验 1 允许移除 project registry 机制，则 §2.3 缺陷自动消失。
+**已完成的修复**：`AgyHubManager` 的三个已确证缺陷（并发竞态、路径穿越、ID 碰撞）均已修复，见 [CODE_REVIEW_2026-09.md](CODE_REVIEW_2026-09.md) §2。
 
 ---
 

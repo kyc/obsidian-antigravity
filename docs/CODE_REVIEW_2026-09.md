@@ -1,8 +1,24 @@
 # 代码评审报告 (Code Review Report)
 
+> [!WARNING]
+> **本文档为历史快照，描述的是一份已不存在的代码状态。**
+>
+> 评审对象 `d129b722` 当时仍包含 **Chat 轨**（`src/core/AgySession.ts`、`src/ui/ChatView.ts`）。该轨道此后已被彻底删除，插件收敛为 Hub + Task 双轨。因此本文档中所有**行号引用与 Chat 轨符号均已失效**：
+>
+> | 本文档引用 | 当前状态 |
+> | :--- | :--- |
+> | `AgySession.ts` / `ChatView.ts` | 文件已删除 |
+> | `activateChatView()` | 已删除（`TaskModal` 现直接调用 `taskRunner.runTask()`） |
+> | `currentCallbacks`、`currentAssistantBubbleEl` | 已删除 |
+> | `startingPromise` | 已重构为 `inFlightStart` + `startMutex` |
+> | `.antigravity-composer-input` (`styles.css:288`) | 已删除 |
+> | `styles.css` 各条行号 | 已全部漂移 |
+>
+> 本文档的**结论与修复记录仍然有效**（13 项问题均已闭环，闭环方式见下表）。阅读时请以 §2 的问题描述和 §6 的方法论复盘为参考，不要依赖其中的行号。当前权威架构说明见 [ARCHITECTURE_AND_DEV_NOTES.md](ARCHITECTURE_AND_DEV_NOTES.md)。
+
 > 评审日期：2026-09
 > 评审对象：`obsidian-antigravity` @ `d129b722`
-> 评审基线：`npm run typecheck` 通过 · `npx eslint src/` 0 error 0 warning · `npm run test` 26 tests / 7 suites 全绿
+> 评审基线：`npm run typecheck` 通过 · `npx eslint src/` 0 error 0 warning · `npm run test` 26 tests / 7 suites 全绿（**当时的数字**；当前为 8 suites / 60 tests）
 > 评审方法：先通读 `docs/ARCHITECTURE_AND_DEV_NOTES.md` 与 `README.md` 建立架构意图，再逐文件审阅 14 个源文件；对高影响问题编写临时复现脚本实证，验证后已清理。
 
 ---
@@ -29,7 +45,7 @@
 | 🟡 | 12 | 裸 `window` 破坏 popout 兼容 | 代码确证 | **已合规解决**：遵循 `prefer-window-timers` 规范，UI 操作优先绑定 `activeWindow` |
 | 🟢 | 13 | Node 模块无 `Platform.isDesktop` 守卫 | 已知妥协，不建议改 | **已知架构决策**：`manifest.json` 已锁定 `"isDesktopOnly": true` |
 
-> **闭环验证**：截至 2026-09-14，全套测试（7 suites, 46 tests）全绿，`npm run lint` 实现 0 错误 0 警告，代码审查问题已全部闭环。
+> **闭环验证**：截至 2026-09-14，全套测试全绿，`npm run lint` 实现 0 错误 0 警告，代码审查问题已全部闭环。（当时数字为 7 suites / 46 tests，现为 8 suites / 60 tests；另于 2026-09 追加修复了 `VaultTaskRunner` 与 `AgyProcess` 的定时器句柄泄漏问题。）
 
 ---
 

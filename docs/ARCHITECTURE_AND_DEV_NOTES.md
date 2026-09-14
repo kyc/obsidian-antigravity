@@ -41,21 +41,21 @@ flowchart TD
 ```
 
 ### 2.1 官方 Web Hub 内嵌视图 (`HubView` + `AgyHubManager`)
-- **实现原理**：通过 [src/core/AgyHubManager.ts](file:///home/kyc/Work/obsidian-antigravity/src/core/AgyHubManager.ts) 在后台守护启动 `agy --hub` 服务进程，动态分配可用端口，以 Obsidian 原生标签页（`ItemView`）内嵌 `<iframe>` 呈现完整的 Antigravity 官方 Web 界面。
+- **实现原理**：通过 [src/core/AgyHubManager.ts](../src/core/AgyHubManager.ts) 在后台守护启动 `agy --hub` 服务进程，动态分配可用端口，以 Obsidian 原生标签页（`ItemView`）内嵌 `<iframe>` 呈现完整的 Antigravity 官方 Web 界面。
 - **核心定位**：处理复杂多轮问答、思维链分析、多 Agent 协作流、Artifacts 交互式生成。
 - **关键文件**：
-  - [src/core/AgyHubManager.ts](file:///home/kyc/Work/obsidian-antigravity/src/core/AgyHubManager.ts)
-  - [src/ui/HubView.ts](file:///home/kyc/Work/obsidian-antigravity/src/ui/HubView.ts)
+  - [src/core/AgyHubManager.ts](../src/core/AgyHubManager.ts)
+  - [src/ui/HubView.ts](../src/ui/HubView.ts)
 
 ### 2.2 离散任务执行器 (`TaskModal` + `ResultModal` + `VaultTaskRunner`)
 - **实现原理**：针对 MOC 构建、未解析双链修复、Frontmatter 校验等单次明确任务，提供快捷模态框。底层通过 `agy --print <prompt> --output-format stream-json --add-dir <vaultPath>` 调用单次非交互进程。
 - **生命周期隔离**：每次执行绑定独立的 `ActiveTaskRun` 句柄与单调递增的 `runId`，彻底杜绝已取消或旧进程延迟发送的 `'exit'` 事件污染后续任务。
-- **审查与回显**：执行产物由 [src/ui/ResultModal.ts](file:///home/kyc/Work/obsidian-antigravity/src/ui/ResultModal.ts) 进行 Markdown 渲染，支持一键复制、追加至当前笔记或创建新独立笔记。
+- **审查与回显**：执行产物由 [src/ui/ResultModal.ts](../src/ui/ResultModal.ts) 进行 Markdown 渲染，支持一键复制、追加至当前笔记或创建新独立笔记。
 - **关键文件**：
-  - [src/core/VaultTaskRunner.ts](file:///home/kyc/Work/obsidian-antigravity/src/core/VaultTaskRunner.ts)
-  - [src/ui/TaskModal.ts](file:///home/kyc/Work/obsidian-antigravity/src/ui/TaskModal.ts)
-  - [src/ui/ConfirmModal.ts](file:///home/kyc/Work/obsidian-antigravity/src/ui/ConfirmModal.ts)
-  - [src/ui/ResultModal.ts](file:///home/kyc/Work/obsidian-antigravity/src/ui/ResultModal.ts)
+  - [src/core/VaultTaskRunner.ts](../src/core/VaultTaskRunner.ts)
+  - [src/ui/TaskModal.ts](../src/ui/TaskModal.ts)
+  - [src/ui/ConfirmModal.ts](../src/ui/ConfirmModal.ts)
+  - [src/ui/ResultModal.ts](../src/ui/ResultModal.ts)
 
 ---
 
@@ -69,14 +69,15 @@ flowchart TD
 ### 3.2 并发防抖与跨 Profile 启动锁 (`inFlightStart` & `startMutex`)
 - **踩坑现象**：多标签页或快速重连并发调用 `startHub` 时，可能出现进程竞争、端口冲突、旧进程被杀导致后发请求拿到残留旧 URL。
 - **解决方案**：
-  1. 相同 Profile 的并发请求通过 `inFlightStart.get(profile)` 合并，共享同一个 Promise；
-  2. 跨 Profile 切换由 `startMutex` 全局互斥锁串行化调度；
-  3. 端口与进程状态在校验就绪后原子提交至实例属性。
+  1. 相同 **Profile + Vault 组合**的并发请求通过 `inFlightStart` 合并，共享同一个 Promise（注意是单个对象而非按 profile 索引的 Map，仅保留最近一次 in-flight 启动）；
+  2. 跨 Profile 切换由 `startMutex` 全局互斥锁串行化调度，锁内重新校验运行态，若已有进程属于不同 profile/vault 则先 `stopHub()`；
+  3. 端口与进程状态在校验就绪后原子提交至实例属性；
+  4. `stopHub()` 持有的 SIGKILL 兜底定时器会随下一次 `stopHub()` 取消，`AgyProcess.killProcess` 返回的句柄对其调用 `unref()`，避免该计时器独自阻止宿主进程退出。
 
 ### 3.3 Profile 数据隔离与路径遍历防御 (`sanitizeProfile`)
 - **踩坑现象**：默认启动 `agy --hub` 会共用 `~/.gemini/antigravity-cli/`，与终端 CLI、Antigravity IDE 发生会话串扰、锁竞争和数据库冲突。
 - **解决方案**：启动参数追加 `--app_data_dir=${hubProfile}`（默认值 `antigravity-obsidian`），将数据完全隔离在 `~/.gemini/antigravity-obsidian/`。
-- **安全防范**：通过 `sanitizeProfile()` 正则 `/^[a-zA-Z0-9_-]+$/` 严格白名单过滤，彻底消除利用 `../../` 逃逸出 `~/.gemini/` 写入越界凭据的路径遍历漏洞。
+- **安全防范**：通过 `sanitizeProfile()` 剔除白名单 `[a-zA-Z0-9_-]` 之外的字符，消除利用 `../../` 逃逸出 `~/.gemini/` 写入越界凭据的路径遍历漏洞。注意实现是**剔除**而非「校验后拒绝」：非法字符被静默删除（`../../victim` → `victim`），空结果回退为 `antigravity-obsidian`。`types.ts` 的 `validateSettings` 另用锚定正则 `/^[a-zA-Z0-9_-]+$/` 对持久化设置做严格校验。
 
 ### 3.4 认证凭据自动同步 (`ensureProfileAuth`)
 - **踩坑现象**：新建独立 Profile 目录后缺少 OAuth 凭据，前端每次启动均要求用户重新扫码/登录。
@@ -85,11 +86,18 @@ flowchart TD
 ### 3.5 破解 `/onboarding` 状态悬挂死循环 (`ensureProfileOnboarding`)
 - **踩坑现象**：即使认证凭证有效，前端仍被强制重定向至 `/onboarding`，界面定格在 `Success, Continuing...` 无法进入主界面。
 - **根本原因**：`main.js` 路由守卫检查 `c.hasOnboardingScreens && e !== 2`。新 Profile 目录下的 `antigravity_state.pbtxt` 缺失完成标记，导致路由守卫无限拦截根路径 `/`。
-- **解决方案**：`ensureProfileOnboarding` 在服务启动前，向 `antigravity_state.pbtxt` 预置状态：
+- **解决方案**：`ensureProfileOnboarding` 在服务启动前，向 `antigravity_state.pbtxt` 预置完整状态。注意 `post_onboarding` 是**嵌套消息**，完成步骤以重复字段 `completed_steps` 列出——不存在 `post_onboarding_step_completed` 这样的扁平字段名：
   ```protobuf
+  post_onboarding:  {
+    completed_steps:  POST_ONBOARDING_STEP_TYPE_MANAGER_WELCOME
+    completed_steps:  POST_ONBOARDING_STEP_TYPE_USAGE_MODE
+    completed_steps:  POST_ONBOARDING_STEP_TYPE_AGENT_CONFIGURATION
+    completed_steps:  POST_ONBOARDING_STEP_TYPE_ADD_WORKSPACE
+  }
   agent_onboarding_completed:  AGENT_ONBOARDING_STATE_COMPLETED
-  post_onboarding_step_completed:  POST_ONBOARDING_STEP_TYPE_MANAGER_WELCOME
+  migrate_convos_into_projects:  MIGRATION_STATUS_COMPLETED
   ```
+  完整字面量（含 `seen_nuxs` 与 `migrations` 键）见 `src/core/AgyHubManager.ts` 的 `ensureProfileOnboarding`。写入采用「读-改-写」：仅当既有内容不含 `AGENT_ONBOARDING_STATE_COMPLETED` 时才补齐，已有完成标记的文件原样保留。
 
 ### 3.6 项目自动注册与哈希防碰撞 (`ensureVaultProject`)
 - **踩坑现象**：绕过 Onboarding 后，Webview 提示 "No Project"，无法读写 Vault 文件。此外不同路径下相同目录名的 Vault 会映射为同一个项目 ID 导致配置覆盖。
@@ -105,11 +113,11 @@ flowchart TD
 
 ### 4.1 权限控制与自动化执行安全门禁
 - **默认受限模式**：`agy --print` 默认**不携带** `--dangerously-skip-permissions`，处于 `request-review` 状态。非交互命令行下，任何试图越权执行 Shell 命令或未授权修改的 Tool Call 会被底层自动拦截，并在返回结果中追加 `[!WARNING] Restricted Execution` 提示。
-- **无限制模式双重确认**：只有在设置中显式开启 `allowUnrestrictedTasks`，且首次执行通过 [src/ui/ConfirmModal.ts](file:///home/kyc/Work/obsidian-antigravity/src/ui/ConfirmModal.ts) 明确确认提示注入（Prompt Injection）与破坏性文件风险后，才允许向 CLI 注入 `--dangerously-skip-permissions`。
-- **常驻风险警示**：无限制模式下生成的所有结果，在 [src/ui/ResultModal.ts](file:///home/kyc/Work/obsidian-antigravity/src/ui/ResultModal.ts) 顶部以红底常驻醒目标识 `.antigravity-risk-banner` 进行风险披露。
+- **无限制模式双重确认**：只有在设置中显式开启 `allowUnrestrictedTasks`，且首次执行通过 [src/ui/ConfirmModal.ts](../src/ui/ConfirmModal.ts) 明确确认提示注入（Prompt Injection）与破坏性文件风险后，才允许向 CLI 注入 `--dangerously-skip-permissions`。
+- **常驻风险警示**：无限制模式下生成的所有结果，在 [src/ui/ResultModal.ts](../src/ui/ResultModal.ts) 顶部以红底常驻醒目标识 `.antigravity-risk-banner` 进行风险披露。
 
 ### 4.2 规则路径与提示词路径净化
-- **规则路径越界拦截**：[src/core/VaultContext.ts](file:///home/kyc/Work/obsidian-antigravity/src/core/VaultContext.ts) 的 `resolveSafeRulesPath` 严格校验解析后的绝对路径必须以 `vaultPath + path.sep` 开头。若检测到 `../../` 等跨库逃逸路径，立即触发 Obsidian `Notice` 警告并强制回退至根目录默认值 `AGENTS.md`。
+- **规则路径越界拦截**：[src/core/VaultContext.ts](../src/core/VaultContext.ts) 的 `resolveSafeRulesPath` 严格校验解析后的绝对路径必须以 `vaultPath + path.sep` 开头。若检测到 `../../` 等跨库逃逸路径，立即触发 Obsidian `Notice` 警告并强制回退至根目录默认值 `AGENTS.md`。
 - **提示词上下文净化**：`sanitizeContextPath` 在生成发送给模型的 Prompt 前，对 `filePath` 与 `folderPath` 进行边界归一化，防止库外路径泄露至提示词中。
 
 ### 4.3 提示词三层叠加原理 (Prompt Layering)
@@ -119,7 +127,7 @@ LLM 在响应时会由底层到表层合并以下上下文：
 3. **Agent 人设层**：选定的 `agent.md`（如 `omarchy-vault`，通过 `--agent` 注入）。
 
 ### 4.4 严格运行时配置校验 (`validateSettings`)
-- 在 [src/types.ts](file:///home/kyc/Work/obsidian-antigravity/src/types.ts) 中实现严格的纯函数校验，防止外部手动编辑 `data.json` 引入畸形类型（如字符串端口、非枚举 `effort`、带路径遍历的 `hubProfile`），保证所有运行时属性的绝对类型安全与边界兜底。
+- 在 [src/types.ts](../src/types.ts) 中实现严格的纯函数校验，防止外部手动编辑 `data.json` 引入畸形类型（如字符串端口、非枚举 `effort`、带路径遍历的 `hubProfile`），保证所有运行时属性的绝对类型安全与边界兜底。
 
 ---
 
@@ -136,6 +144,10 @@ obsidian-antigravity/
 │   │   ├── AgyHubManager.ts           # agy --hub 守护进程、Profile 认证、Onboarding 及项目注册管理
 │   │   ├── VaultContext.ts            # Obsidian 笔记/选区/目录上下文提取、路径净化与规则维护
 │   │   └── VaultTaskRunner.ts         # 单次独立任务运行器 (agy --print, 生命周期与权限控制)
+│   ├── i18n/
+│   │   ├── index.ts                   # 语言解析 (getLanguage 探测 + 手动覆盖) 与 t() 插值
+│   │   ├── types.ts                   # TranslationKey 联合类型与 LocaleDictionary 契约
+│   │   └── locales/                   # en / zh-cn / zh-tw 三份类型安全字符串目录
 │   ├── settings/
 │   │   └── AntigravitySettingTab.ts   # 声明式插件配置面板 (1.13+ getSettingDefinitions)
 │   └── ui/
@@ -146,14 +158,16 @@ obsidian-antigravity/
 │       └── ResultModal.ts             # 任务执行产物审查模态框 (Markdown 渲染 / 风险标识 / 一键操作)
 ├── tests/
 │   ├── __mocks__/obsidian.ts          # 完备的 Obsidian API 模拟层
-│   └── unit/                          # 覆盖 core, ui, settings 的完整 Jest 单元测试套件 (7 suites, 46 tests)
+│   ├── setupWindow.ts                 # jsdom 环境与 Obsidian DOM 辅助方法垫片
+│   └── unit/                          # 完整 Jest 单元测试套件 (8 suites, 60 tests)
 │       ├── core/                      # AgyHubManager, VaultContext, VaultTaskRunner, AgyResolver, AgyProcess
 │       ├── ui/                        # StatusBarItem 测试
+│       ├── i18n.test.ts               # 语言解析与插值测试
 │       └── settings.test.ts           # 运行时配置类型与边界测试
 ├── docs/
 │   ├── ARCHITECTURE_AND_DEV_NOTES.md  # 本文档 (系统架构、避坑要点与演进记录)
 │   ├── HUB_CAPABILITY_BOUNDARIES.md   # 官方 Antigravity Hub 逆向调查与协议边界分析
-│   └── CODE_REVIEW_2026-09.md         # 代码审查报告与 13 项缺陷修复闭环记录
+│   └── CODE_REVIEW_2026-09.md         # 历史评审快照 (描述 Chat 轨时代的代码，行号已失效)
 ├── esbuild.config.mjs                 # 打包配置 (原生 node:module 导入，构建自动同步至目标 Vault)
 ├── manifest.json                      # Obsidian 插件元数据清单 (1.13.0+, isDesktopOnly)
 └── package.json                       # 依赖与校验脚本配置
