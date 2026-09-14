@@ -9,8 +9,12 @@ export interface FsOperations {
   accessSync(p: string, mode: number): void;
 }
 
+/** How long a failed lookup is remembered before retrying. */
+const NOT_FOUND_TTL_MS = 5000;
+
 export class AgyResolver {
   private cachedPath: string | null = null;
+  private notFoundUntil = 0;
   private fsOps: FsOperations;
 
   constructor(fsOps?: FsOperations) {
@@ -26,12 +30,22 @@ export class AgyResolver {
       const trimmed = configuredPath.trim();
       if (this.isExecutable(trimmed)) {
         this.cachedPath = trimmed;
+        this.notFoundUntil = 0;
         return trimmed;
       }
     }
 
     if (this.cachedPath && this.isExecutable(this.cachedPath)) {
       return this.cachedPath;
+    }
+
+    // A failed lookup is cached briefly. Without this, resolve() repeats the
+    // synchronous `which agy` fallback on every call (onload, settings
+    // verification, every task launch) whenever the CLI is not installed,
+    // blocking the UI thread each time. A short TTL still lets the user
+    // install agy and see it picked up without restarting Obsidian.
+    if (Date.now() < this.notFoundUntil) {
+      return null;
     }
 
     // Well-known binary paths
@@ -56,6 +70,7 @@ export class AgyResolver {
     for (const candidate of candidatePaths) {
       if (this.isExecutable(candidate)) {
         this.cachedPath = candidate;
+        this.notFoundUntil = 0;
         return candidate;
       }
     }
@@ -71,12 +86,14 @@ export class AgyResolver {
       const firstLine = output.split('\n')[0]?.trim();
       if (firstLine && this.isExecutable(firstLine)) {
         this.cachedPath = firstLine;
+        this.notFoundUntil = 0;
         return firstLine;
       }
     } catch {
       // Ignore fallback lookup errors
     }
 
+    this.notFoundUntil = Date.now() + NOT_FOUND_TTL_MS;
     return null;
   }
 
@@ -101,6 +118,7 @@ export class AgyResolver {
 
   clearCache(): void {
     this.cachedPath = null;
+    this.notFoundUntil = 0;
   }
 
   private isExecutable(filePath: string): boolean {

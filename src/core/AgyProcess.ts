@@ -7,6 +7,15 @@ export interface SpawnSpec {
   args: string[];
   cwd: string;
   env?: Record<string, string>;
+  /**
+   * stdio configuration. Defaults to ['ignore', 'pipe', 'pipe'].
+   *
+   * stdin is 'ignore' rather than 'pipe' on purpose: a piped stdin that is
+   * never written to nor closed stays open forever, so a child that reads it
+   * (agy does, via --input-format) blocks indefinitely instead of failing.
+   * 'ignore' gives the child an immediate EOF.
+   */
+  stdio?: SpawnOptions['stdio'];
 }
 
 /** Handle for cancelling a pending SIGKILL escalation timer. */
@@ -41,7 +50,7 @@ export class AgyProcess {
     const child = spawn(spec.executable, spec.args, {
       cwd: spec.cwd,
       env: enrichedEnv,
-      stdio: ['pipe', 'pipe', 'pipe'],
+      stdio: spec.stdio || ['ignore', 'pipe', 'pipe'],
       ...options,
     });
 

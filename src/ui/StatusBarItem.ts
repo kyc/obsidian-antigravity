@@ -7,7 +7,7 @@ export class StatusBarItem {
   private spinnerEl: HTMLElement;
   private textEl: HTMLElement;
   private currentState: ProcessState = 'idle';
-  private currentMessage = 'Idle';
+  private currentMessage = t('statusBar.idle');
 
   constructor(
     plugin: Plugin,

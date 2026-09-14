@@ -1,4 +1,4 @@
-import { App, Component, MarkdownRenderer, MarkdownView, Modal, Notice, Setting } from 'obsidian';
+import { App, Component, MarkdownRenderer, MarkdownView, Modal, Notice, Setting, normalizePath } from 'obsidian';
 import { t } from '../i18n';
 
 export class ResultModal extends Modal {
@@ -60,8 +60,7 @@ export class ResultModal extends Modal {
       })
       .addButton((btn) => {
         btn.setButtonText(t('resultModal.btnCreate')).onClick(async () => {
-          const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-          const fileName = `Antigravity Result ${timestamp}.md`;
+          const fileName = this.buildUniqueFileName();
           try {
             await this.app.vault.create(fileName, `# ${this.title}\n\n${this.content}\n`);
             new Notice(t('resultModal.noticeCreatedNote', { fileName }));
@@ -76,6 +75,25 @@ export class ResultModal extends Modal {
           this.close();
         });
       });
+  }
+
+  /**
+   * Builds a vault-unique note name. The timestamp is only second-precision,
+   * so two clicks within the same second would otherwise collide; a numeric
+   * suffix is appended until the path is free.
+   */
+  private buildUniqueFileName(): string {
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const base = `Antigravity Result ${timestamp}`;
+
+    let candidate = normalizePath(`${base}.md`);
+    let counter = 1;
+    while (this.app.vault.getAbstractFileByPath(candidate)) {
+      candidate = normalizePath(`${base} ${counter}.md`);
+      counter += 1;
+    }
+
+    return candidate;
   }
 
   onClose(): void {

@@ -208,6 +208,17 @@ export default class AntigravityPlugin extends Plugin {
   }
 
   async saveSettings(): Promise<void> {
+    // Turning unrestricted mode off invalidates the earlier "I understand the
+    // risk" acknowledgement. Without this, flipping the toggle off and back on
+    // would run autonomously with no confirmation, which is not what the user
+    // agreed to. Re-arm the prompt so consent is re-established each time.
+    //
+    // The confirmation flow sets unrestrictedConfirmed only while the toggle is
+    // already on, so this cannot clear a fresh acknowledgement.
+    if (!this.settings.allowUnrestrictedTasks) {
+      this.settings.unrestrictedConfirmed = false;
+    }
+
     await this.saveData(this.settings);
     setConfiguredLanguage(this.settings.language);
   }
