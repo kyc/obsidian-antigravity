@@ -19,7 +19,9 @@ English | [简体中文](README.zh-CN.md)
 
 ### From the community plugins browser
 
-Not yet published. Use a manual install in the meantime.
+Search for "Antigravity" under **Settings → Community plugins → Browse**, then install and enable it.
+
+If it does not appear there yet, use a manual install instead.
 
 ### Manual install
 
