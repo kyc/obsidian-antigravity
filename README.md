@@ -1,80 +1,142 @@
-# Obsidian Antigravity Plugin
+# Obsidian Antigravity
 
-A lightweight, dedicated Obsidian plugin that embeds Google Antigravity (`agy`) directly into your Obsidian vault as an autonomous knowledge organization and assistant tool.
+An Obsidian plugin that connects your vault to Google Antigravity's `agy` CLI, letting an agent read, reorganize, and maintain your notes.
 
-Independent of multi-provider chat frameworks, this plugin gives you direct access to Antigravity's agentic filesystem manipulation, code execution, and reasoning power tailored specifically for Obsidian note-taking.
+Rather than wrapping Antigravity in a chat interface, this plugin exposes it as discrete vault tasks and an optional embedded web view. It builds on Antigravity's agentic filesystem access instead of a multi-provider chat framework.
+
+English | [简体中文](README.zh-CN.md)
 
 ---
 
-## Highlights
+## Requirements
 
-- **Task-Driven Vault Management**: Trigger refactoring, link fixing, tag cleanup, and Map of Content (MOC) generation via commands or hotkeys without conversational UI bloat.
-- **Embedded Web Hub View**: Optionally open an Obsidian tab powered by `agy --hub` for Google's full official Web UI (streaming thinking blocks, tool cards, multi-agent artifacts).
-- **Obsidian Context Awareness**: Automatically extracts active note paths, editor text selections, and folder structures into agent instructions.
-- **Status Bar & Process Safety**: Real-time status indicator, dynamic spinner, and instant click-to-cancel controls.
-- **Vault Rules Enforcement**: Automatically creates and injects `AGENTS.md` ensuring Antigravity strictly respects Obsidian conventions (`[[Wikilinks]]`, YAML frontmatter).
-- **Permission & Execution Safety**: Background tasks run in restricted approval mode by default. Autonomous tool execution (`--dangerously-skip-permissions`) is strictly gated behind an explicit setting, a confirmation modal, and persistent risk banners on results.
+- **Desktop only.** The plugin spawns `agy` as a child process, so it cannot run on mobile.
+- **The `agy` CLI must be installed and authenticated.** The plugin does not bundle or install it. Configure the binary path in settings if it is not in a standard location.
+
+---
+
+## Installation
+
+### From the community plugins browser
+
+Not yet published. Use a manual install in the meantime.
+
+### Manual install
+
+1. Download `main.js`, `manifest.json`, and `styles.css` from the [latest release](https://github.com/kyc/obsidian-antigravity/releases).
+2. Create the folder `<your-vault>/.obsidian/plugins/antigravity/`.
+3. Place the three files inside it.
+4. In Obsidian, enable the plugin under **Settings → Community plugins**.
+
+### From source
+
+```bash
+git clone https://github.com/kyc/obsidian-antigravity.git
+cd obsidian-antigravity
+npm install
+npm run build
+```
+
+`npm run build` writes the bundle to the repository root and copies it into the vault at `$OBSIDIAN_PLUGIN_PATH`, defaulting to `~/Obsidians/Omarchy-Desktop/.obsidian/plugins/antigravity`. Override that variable to target a different vault.
+
+---
+
+## Features
+
+- **Discrete vault tasks** — Run refactoring, link auditing, frontmatter cleanup, and MOC generation from the command palette, without a conversational UI.
+- **Embedded web hub** — Optionally open a tab running `agy --hub`, giving you the full Antigravity web UI (streaming thinking blocks, tool cards, multi-agent artifacts) inside Obsidian.
+- **Vault context awareness** — The active note path, editor selection, or containing folder is extracted and passed to the agent automatically.
+- **Status bar control** — A live status indicator with a spinner, click to cancel a running task.
+- **Vault rules** — An `AGENTS.md` file is created and injected so the agent follows Obsidian conventions such as `[[wikilinks]]` and YAML frontmatter.
+- **Permission gating** — Background tasks run in restricted approval mode by default. Unrestricted autonomous execution is gated behind a setting, a confirmation dialog, and a persistent risk banner on results.
 
 ---
 
 ## Commands
 
-All commands follow Obsidian's sentence case standard:
+All commands are available from the command palette and can be bound to hotkeys. Names follow Obsidian's sentence case convention.
 
 | Command | ID | Description |
 | :--- | :--- | :--- |
-| `Run task on active context` | `run-task` | Opens the task modal with context badge (selection/note/vault) and one-click action presets. |
-| `Fix wikilinks in active note` | `fix-links` | Audits and fixes broken links; links references to existing vault notes. |
-| `Audit and clean frontmatter in active note` | `audit-frontmatter` | Validates and cleans YAML tags, aliases, and metadata. |
-| `Build map of content (MOC) for current folder` | `build-folder-moc` | Scans current folder and generates or updates a structured `_MOC.md` index note. |
-| `Open assistant web hub view` | `open-hub` | Opens the embedded Webview tab running the official Antigravity Web Hub. |
-| `Stop current task` | `stop-task` | Cancels any currently executing background `agy` process. |
+| Open assistant web hub view | `open-hub` | Opens the embedded webview tab running the Antigravity web hub. |
+| Run task on active context | `run-task` | Opens the task dialog with a context badge (selection / note / vault) and action presets. |
+| Fix wikilinks in active note | `fix-links` | Audits wikilinks, fixes broken ones, and suggests links for unlinked references. |
+| Audit and clean frontmatter in active note | `audit-frontmatter` | Validates and standardizes YAML tags, aliases, and metadata without removing custom fields. |
+| Build map of content (MOC) for current folder | `build-folder-moc` | Scans the folder and creates or updates a `_MOC.md` index note. |
+| Stop current task | `stop-task` | Cancels the running `agy` process. |
+
+The ribbon icon opens the hub. Right-click it, or hold <kbd>Alt</kbd> while clicking, for a menu with the task and stop actions instead.
 
 ---
 
 ## Configuration
 
-In **Settings > Antigravity**:
+Found under **Settings → Antigravity**.
 
-1. **Antigravity binary path**: Auto-detects `agy` in `~/.local/bin`, `/usr/local/bin`, or user PATH. Provides a **Verify binary** button to test execution.
-2. **Default model**: Select model ID passed to `agy` (e.g. `gemini-3.8-flash-high`, `gemini-3.8-flash-medium`, `gemini-3.8-flash-low`, `gemini-3.7-flash-high`, `gemini-3.1-pro-high`, `claude-sonnet-4-6`).
-3. **Reasoning effort**: Configure reasoning intensity (`none`, `low`, `medium`, `high`).
-4. **Default agent**: Specify default agent persona (default: `omarchy-vault`).
-5. **Assistant hub**:
-   - **Hub profile name**: Data directory under `~/.gemini/` (default: `antigravity-obsidian`) isolating chats and projects from Antigravity IDE and standalone CLI.
-   - **Hub port**: Port for the local hub HTTP server (default `0` for dynamic free port).
-   - **Auto-start hub server**: Start the Antigravity hub daemon automatically when Obsidian loads.
-6. **Vault rules**:
-   - **Maintain vault rules file**: Automatically create and inject rules file for Obsidian conventions.
-   - **Vault rules relative path**: Relative path from vault root (default: `AGENTS.md`).
-7. **Vault tasks & security**:
-   - **Allow unrestricted tasks**: Allows `--dangerously-skip-permissions` to auto-approve tool execution for background tasks. Requires explicit confirmation on first run. When disabled, dangerous operations are blocked in headless mode.
+**Language** — Interface language. Options are auto (follows Obsidian), English, Simplified Chinese, and Traditional Chinese.
+
+**Antigravity binary path** — Location of the `agy` executable. When empty, the plugin searches `~/.local/bin`, `/usr/local/bin`, `/usr/bin`, and your `PATH`. The **Verify binary** button runs `agy --version` to confirm the plugin can execute it.
+
+**Default model** — Model ID passed to `agy`. Choices are `gemini-3.8-flash-high`, `gemini-3.8-flash-medium`, `gemini-3.8-flash-low`, `gemini-3.7-flash-high`, `gemini-3.1-pro-high`, `gemini-3.1-pro-low`, and `claude-sonnet-4-6`.
+
+**Reasoning effort** — Reasoning intensity passed via `--effort`: `none` (catalog default), `low`, `medium`, or `high`.
+
+**Default agent** — Agent persona passed via `--agent`. Defaults to `omarchy-vault`.
+
+### Assistant hub
+
+- **Hub profile name** — Data directory under `~/.gemini/`, default `antigravity-obsidian`. This isolates the hub's conversations and projects from your Antigravity IDE and standalone CLI sessions.
+- **Hub port** — Port for the local hub HTTP server. `0` picks a free port dynamically.
+- **Auto-start hub server** — Start the hub daemon when Obsidian loads.
+
+### Vault rules
+
+- **Maintain vault rules file** — Create and inject a rules file describing Obsidian conventions.
+- **Vault rules relative path** — Path relative to the vault root, default `AGENTS.md`. Paths resolving outside the vault fall back to `AGENTS.md`.
+
+### Vault tasks & security
+
+- **Allow unrestricted tasks** — Passes `--dangerously-skip-permissions` to auto-approve tool execution. Requires an explicit confirmation on first use. While disabled, dangerous operations are blocked in headless mode and reported as `denied_actions`.
 
 ---
 
-## Security & Privacy Disclosures
+## Security & privacy
 
-To ensure full transparency and compliance with Obsidian community guidelines:
-
-- **Desktop-Only**: The plugin requires Node.js child processes and is declared `"isDesktopOnly": true` in `manifest.json`.
-- **Sandbox Profile Isolation**: The Hub daemon runs with `--app_data_dir=antigravity-obsidian`, preventing database locks, session collisions, or credential contamination with your primary Antigravity IDE.
-- **External Configuration Access**: To bootstrap the official Angular SPA without requiring manual browser re-login, the plugin accesses `~/.gemini/` exclusively to copy OAuth credentials with `0600` permissions and register workspace JSON links.
-- **Path Sanitization**: All profile names, rules paths, and prompt context paths are strictly validated against path traversal (`../`) attacks.
+- **Desktop only** — Node.js child processes are required, declared as `"isDesktopOnly": true` in `manifest.json`.
+- **Profile isolation** — The hub daemon runs with `--app_data_dir=antigravity-obsidian`, so it cannot lock the database or collide with sessions in your primary Antigravity IDE.
+- **Access to `~/.gemini/`** — To bootstrap the Antigravity web UI without a second interactive login, the plugin reads `~/.gemini/` to copy OAuth credentials (written with `0600` permissions) and to register a workspace JSON link for your vault.
+- **No external network requests** — The plugin makes no outbound requests of its own. Its only HTTP call is a loopback health check against `127.0.0.1` to detect when the local hub is listening. All model traffic is handled by the `agy` process.
+- **Path validation** — Profile names and rules paths are sanitized against traversal (`../`). Context paths embedded in prompts are resolved and confined to the vault.
+- **Task permissions** — Tasks are restricted by default. The plugin does not silently auto-approve tool use.
 
 ---
 
 ## Development
 
 ```bash
-npm run typecheck    # Check TypeScript types
-npm run lint         # Lint source files with eslint-plugin-obsidianmd
-npm test             # Run Jest unit test suite (7 suites, 46 tests)
-npm run build        # Production bundle to main.js and sync to vault
 npm run dev          # Watch mode with automatic rebuild
+npm run build        # Production bundle to main.js and sync to vault
+npm run typecheck    # Verify TypeScript types
+npm test             # Run the Jest unit test suite (8 suites, 60 tests)
+npm run lint         # Lint source files with eslint-plugin-obsidianmd
 ```
 
-The full validation pipeline is:
+The full validation pipeline, also run by CI on every push and pull request:
 
 ```bash
 npm run typecheck && npm test && npm run build && npm run lint
 ```
+
+Unit tests mirror `src/` under `tests/unit/`. See [CONTRIBUTING.md](CONTRIBUTING.md) for commit conventions and code standards.
+
+Additional documentation:
+
+- [Architecture and development notes](docs/ARCHITECTURE_AND_DEV_NOTES.md)
+- [Hub capability boundaries](docs/HUB_CAPABILITY_BOUNDARIES.md)
+- [Code review notes](docs/CODE_REVIEW_2026-09.md)
+
+---
+
+## License
+
+[MIT](LICENSE)
