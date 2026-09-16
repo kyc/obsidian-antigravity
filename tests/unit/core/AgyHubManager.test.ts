@@ -175,6 +175,49 @@ describe('AgyHubManager', () => {
       spawnSpy.mockRestore();
     });
 
+    it('passes --dangerously-skip-permissions when dangerouslySkipPermissions is true', async () => {
+      const childProcess = require('child_process');
+      const spawnSpy = jest.spyOn(childProcess, 'spawn').mockImplementation(() => {
+        const fakeChild = {
+          on: jest.fn(),
+          kill: jest.fn(),
+        };
+        return fakeChild;
+      });
+      jest.spyOn(hubManager as unknown as { waitForPort: () => Promise<boolean> }, 'waitForPort').mockResolvedValue(true);
+
+      await hubManager.startHub('/bin/agy', '/test/vault', 42500, 'test-profile', undefined, true);
+
+      expect(spawnSpy).toHaveBeenCalledWith(
+        '/bin/agy',
+        expect.arrayContaining(['--dangerously-skip-permissions', '--hub-port=42500', '--add-dir=/test/vault']),
+        expect.any(Object),
+      );
+      expect(hubManager.getDangerouslySkipPermissions()).toBe(true);
+
+      spawnSpy.mockRestore();
+    });
+
+    it('omits --dangerously-skip-permissions when dangerouslySkipPermissions is false', async () => {
+      const childProcess = require('child_process');
+      const spawnSpy = jest.spyOn(childProcess, 'spawn').mockImplementation(() => {
+        const fakeChild = {
+          on: jest.fn(),
+          kill: jest.fn(),
+        };
+        return fakeChild;
+      });
+      jest.spyOn(hubManager as unknown as { waitForPort: () => Promise<boolean> }, 'waitForPort').mockResolvedValue(true);
+
+      await hubManager.startHub('/bin/agy', '/test/vault', 42500, 'test-profile', undefined, false);
+
+      const spawnArgs = spawnSpy.mock.calls[0][1];
+      expect(spawnArgs).not.toContain('--dangerously-skip-permissions');
+      expect(hubManager.getDangerouslySkipPermissions()).toBe(false);
+
+      spawnSpy.mockRestore();
+    });
+
     it('coalesces concurrent startHub calls with the same profile into a single spawn', async () => {
       const childProcess = require('child_process');
       const fakeChild = {
@@ -397,6 +440,7 @@ describe('AgyHubManager', () => {
       const updated = JSON.parse(fs.readFileSync(projectFile, 'utf8'));
       expect(updated.settings).toEqual({
         artifactReviewMode: 'ARTIFACT_REVIEW_MODE_TURBO',
+        autoExecutionPolicy: 'CASCADE_COMMANDS_AUTO_EXECUTION_AUTO',
         customKey: true,
       });
     });
@@ -479,6 +523,34 @@ describe('AgyHubManager', () => {
       const targetFile = path.join(targetDir, 'settings.json');
       const parsed = JSON.parse(fs.readFileSync(targetFile, 'utf8'));
       expect(parsed.trustedWorkspaces).toEqual([normalized]);
+    });
+
+    // These two keys are privileged defaults: they are what let the hub run
+    // tools without per-call review and reach outside the vault. They were
+    // previously written with no test pinning them, so a careless edit could
+    // silently change the security posture. Asserted explicitly on purpose.
+    it('seeds permissionMode and allowNonWorkspaceAccess on a fresh profile', () => {
+      expect(ensureProfileSettings('test-obsidian', undefined, tmpDir)).toBe(true);
+
+      const targetFile = path.join(tmpDir, '.gemini', 'test-obsidian', 'settings.json');
+      const parsed = JSON.parse(fs.readFileSync(targetFile, 'utf8'));
+      expect(parsed.permissionMode).toBe('always-proceed');
+      expect(parsed.allowNonWorkspaceAccess).toBe(true);
+    });
+
+    it('does not overwrite a user-supplied permissionMode or access flag', () => {
+      const targetDir = path.join(tmpDir, '.gemini', 'test-obsidian');
+      fs.mkdirSync(targetDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(targetDir, 'settings.json'),
+        JSON.stringify({ permissionMode: 'request-review', allowNonWorkspaceAccess: false }),
+      );
+
+      ensureProfileSettings('test-obsidian', undefined, tmpDir);
+
+      const parsed = JSON.parse(fs.readFileSync(path.join(targetDir, 'settings.json'), 'utf8'));
+      expect(parsed.permissionMode).toBe('request-review');
+      expect(parsed.allowNonWorkspaceAccess).toBe(false);
     });
   });
 });

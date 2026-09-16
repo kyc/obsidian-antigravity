@@ -17,6 +17,7 @@ export class HubView extends ItemView {
     private getPreferredPort: () => number,
     private getProfile: () => string,
     private getDefaultAgent?: () => string,
+    private getAllowUnrestricted?: () => boolean,
   ) {
     super(leaf);
   }
@@ -70,13 +71,12 @@ export class HubView extends ItemView {
   }
 
   private async initHub(): Promise<void> {
-    if (this.hubManager.isRunning()) {
-      this.renderIframe(this.getThemedHubUrl());
-      return;
-    }
-
-    this.renderLoading(t('hubView.starting'));
-
+    // Deliberately resolve the binary and vault *before* the already-running
+    // fast path below. The alternative — checking `isRunning()` first — would
+    // keep the happy path marginally cheaper but report an error for a live hub
+    // whenever resolution transiently fails, hiding the fact that the daemon is
+    // still up and serving. Failing loudly on a broken environment is the more
+    // useful behaviour here, and resolution is cheap.
     const execPath = this.getAgyExecutable();
     const vaultPath = this.getVaultPath();
 
@@ -90,13 +90,30 @@ export class HubView extends ItemView {
       return;
     }
 
+    const allowUnrestricted = this.getAllowUnrestricted ? this.getAllowUnrestricted() : false;
+    const profile = this.getProfile();
+
+    if (
+      this.hubManager.isRunning() &&
+      this.hubManager.getHubUrl() &&
+      this.hubManager.getCurrentProfile() === profile &&
+      this.hubManager.getVaultPath() === vaultPath &&
+      this.hubManager.getDangerouslySkipPermissions() === allowUnrestricted
+    ) {
+      this.renderIframe(this.getThemedHubUrl());
+      return;
+    }
+
+    this.renderLoading(t('hubView.starting'));
+
     try {
       await this.hubManager.startHub(
         execPath,
         vaultPath,
         this.getPreferredPort(),
-        this.getProfile(),
+        profile,
         this.getDefaultAgent ? this.getDefaultAgent() : undefined,
+        allowUnrestricted,
       );
       this.renderIframe(this.getThemedHubUrl());
     } catch (err) {

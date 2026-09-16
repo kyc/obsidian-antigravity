@@ -1,4 +1,4 @@
-import { MarkdownView, Menu, Notice, Plugin, WorkspaceLeaf } from 'obsidian';
+import { Menu, Notice, Plugin, WorkspaceLeaf } from 'obsidian';
 import { AgyHubManager } from './core/AgyHubManager';
 import { AgyResolver } from './core/AgyResolver';
 import { VaultContext } from './core/VaultContext';
@@ -59,6 +59,7 @@ export default class AntigravityPlugin extends Plugin {
           () => this.settings.hubPort,
           () => this.settings.hubProfile || 'antigravity-obsidian',
           () => this.settings.defaultAgent,
+          () => this.settings.allowUnrestrictedTasks,
         ),
     );
 
@@ -92,7 +93,7 @@ export default class AntigravityPlugin extends Plugin {
       id: 'fix-links',
       name: t('commands.fixLinks'),
       checkCallback: (checking: boolean) => {
-        const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+        const view = this.vaultContext.resolveMarkdownView();
         if (view && view.file) {
           if (!checking) {
             const ctx = this.vaultContext.getActiveContext();
@@ -112,7 +113,7 @@ export default class AntigravityPlugin extends Plugin {
       id: 'audit-frontmatter',
       name: t('commands.auditFrontmatter'),
       checkCallback: (checking: boolean) => {
-        const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+        const view = this.vaultContext.resolveMarkdownView();
         if (view && view.file) {
           if (!checking) {
             const ctx = this.vaultContext.getActiveContext();
@@ -132,7 +133,7 @@ export default class AntigravityPlugin extends Plugin {
       id: 'build-folder-moc',
       name: t('commands.buildFolderMoc'),
       checkCallback: (checking: boolean) => {
-        const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+        const view = this.vaultContext.resolveMarkdownView();
         if (view && view.file && view.file.parent) {
           if (!checking) {
             const folderPath = view.file.parent.path;
@@ -178,6 +179,7 @@ export default class AntigravityPlugin extends Plugin {
             this.settings.hubPort,
             this.settings.hubProfile || 'antigravity-obsidian',
             this.settings.defaultAgent,
+            this.settings.allowUnrestrictedTasks,
           )
           .catch((err: unknown) => {
             // Auto-start runs in the background, but failing silently leaves
@@ -268,7 +270,6 @@ export default class AntigravityPlugin extends Plugin {
         prompt,
         context,
         model: this.settings.model,
-        effort: this.settings.effort,
       });
 
       new ResultModal(this.app, title, output, this.settings.allowUnrestrictedTasks).open();
@@ -278,6 +279,28 @@ export default class AntigravityPlugin extends Plugin {
   }
 
   async activateHubView(): Promise<void> {
+    // The hub runs an interactive session where a single approval covers every
+    // tool call for its whole lifetime, so it needs its own confirmation rather
+    // than inheriting the one given for one-shot tasks.
+    if (this.settings.allowUnrestrictedTasks && !this.settings.hubUnrestrictedConfirmed) {
+      new ConfirmModal(
+        this.app,
+        t('confirmModal.hubUnrestrictedTitle'),
+        t('confirmModal.hubUnrestrictedMessage'),
+        t('confirmModal.hubUnrestrictedConfirm'),
+        async () => {
+          this.settings.hubUnrestrictedConfirmed = true;
+          await this.saveSettings();
+          await this.openHubLeaf();
+        },
+      ).open();
+      return;
+    }
+
+    await this.openHubLeaf();
+  }
+
+  private async openHubLeaf(): Promise<void> {
     const { workspace } = this.app;
     let leaf: WorkspaceLeaf | null = null;
     const leaves = workspace.getLeavesOfType(ANTIGRAVITY_HUB_VIEW_TYPE);

@@ -141,6 +141,11 @@ export function ensureVaultProject(vaultPath: string, homeDir: string = os.homed
       }
     }
 
+    const defaultSettings: Record<string, unknown> = {
+      artifactReviewMode: 'ARTIFACT_REVIEW_MODE_TURBO',
+      autoExecutionPolicy: 'CASCADE_COMMANDS_AUTO_EXECUTION_AUTO',
+    };
+
     const projectData = {
       id: projectId,
       name: projectName,
@@ -153,7 +158,7 @@ export function ensureVaultProject(vaultPath: string, homeDir: string = os.homed
           },
         ],
       },
-      settings: existingSettings,
+      settings: { ...defaultSettings, ...existingSettings },
       isWorkspaceOnly: false,
     };
 
@@ -243,6 +248,13 @@ export function ensureProfileSettings(
       }
     }
 
+    if (!settings.permissionMode) {
+      settings.permissionMode = 'always-proceed';
+    }
+    if (settings.allowNonWorkspaceAccess === undefined) {
+      settings.allowNonWorkspaceAccess = true;
+    }
+
     fs.writeFileSync(targetSettingsFile, JSON.stringify(settings, null, 2), {
       encoding: 'utf8',
       mode: 0o600,
@@ -268,6 +280,7 @@ export function ensureProfileInitialized(
 interface InFlightHubStart {
   profile: string;
   vaultPath: string;
+  dangerouslySkipPermissions: boolean;
   promise: Promise<string>;
 }
 
@@ -292,6 +305,7 @@ export class AgyHubManager {
   private vaultPath: string | null = null;
   private currentProfile: string | null = null;
   private currentProjectId: string | null = null;
+  private currentDangerouslySkipPermissions: boolean = false;
   private inFlightStart: InFlightHubStart | null = null;
   private startMutex: Promise<void> = Promise.resolve();
   private killEscalation: KillEscalation | null = null;
@@ -303,32 +317,51 @@ export class AgyHubManager {
     preferredPort: number = 0,
     profile: string = 'antigravity-obsidian',
     defaultAgent?: string,
+    dangerouslySkipPermissions: boolean = false,
   ): Promise<string> {
     const safeProfile = sanitizeProfile(profile);
 
-    // 1. Fast path: if hub is already running for the exact same profile & vault
-    if (this.isRunning() && this.port && this.currentProfile === safeProfile && this.vaultPath === vaultPath) {
+    // 1. Fast path: if hub is already running for the exact same profile, vault & permission mode
+    if (
+      this.isRunning() &&
+      this.port &&
+      this.currentProfile === safeProfile &&
+      this.vaultPath === vaultPath &&
+      this.currentDangerouslySkipPermissions === dangerouslySkipPermissions
+    ) {
       return this.getHubUrl();
     }
 
-    // 2. Coalescing in-flight start for the same profile and vault
+    // 2. Coalescing in-flight start for the same profile, vault and permission mode
     if (
       this.inFlightStart &&
       this.inFlightStart.profile === safeProfile &&
-      this.inFlightStart.vaultPath === vaultPath
+      this.inFlightStart.vaultPath === vaultPath &&
+      this.inFlightStart.dangerouslySkipPermissions === dangerouslySkipPermissions
     ) {
       return this.inFlightStart.promise;
     }
 
-    // 3. Serialize starts across differing profiles or vaults via mutex
+    // 3. Serialize starts across differing profiles, vaults or permission modes via mutex
     const runStart = async (): Promise<string> => {
       // Re-check running state after acquiring lock
-      if (this.isRunning() && this.port && this.currentProfile === safeProfile && this.vaultPath === vaultPath) {
+      if (
+        this.isRunning() &&
+        this.port &&
+        this.currentProfile === safeProfile &&
+        this.vaultPath === vaultPath &&
+        this.currentDangerouslySkipPermissions === dangerouslySkipPermissions
+      ) {
         return this.getHubUrl();
       }
 
-      // If a hub is running with a different profile or vault, stop it now
-      if (this.hubProcess && (this.currentProfile !== safeProfile || this.vaultPath !== vaultPath)) {
+      // If a hub is running with a different profile, vault, or permission mode, stop it now
+      if (
+        this.hubProcess &&
+        (this.currentProfile !== safeProfile ||
+          this.vaultPath !== vaultPath ||
+          this.currentDangerouslySkipPermissions !== dangerouslySkipPermissions)
+      ) {
         this.stopHub();
       }
 
@@ -344,6 +377,10 @@ export class AgyHubManager {
         `--project=${projectId}`,
         `--add-dir=${vaultPath}`,
       ];
+
+      if (dangerouslySkipPermissions) {
+        args.push('--dangerously-skip-permissions');
+      }
 
       if (defaultAgent) {
         args.push(`--agent=${defaultAgent}`);
@@ -381,6 +418,7 @@ export class AgyHubManager {
           this.currentProfile = null;
           this.currentProjectId = null;
           this.vaultPath = null;
+          this.currentDangerouslySkipPermissions = false;
         }
       });
 
@@ -401,6 +439,7 @@ export class AgyHubManager {
       this.currentProfile = safeProfile;
       this.currentProjectId = projectId;
       this.vaultPath = vaultPath;
+      this.currentDangerouslySkipPermissions = dangerouslySkipPermissions;
 
       return this.buildHubUrl(port, projectId);
     };
@@ -418,6 +457,7 @@ export class AgyHubManager {
     this.inFlightStart = {
       profile: safeProfile,
       vaultPath,
+      dangerouslySkipPermissions,
       promise: startPromise,
     };
 
@@ -456,6 +496,18 @@ export class AgyHubManager {
     return this.port;
   }
 
+  getCurrentProfile(): string | null {
+    return this.currentProfile;
+  }
+
+  getVaultPath(): string | null {
+    return this.vaultPath;
+  }
+
+  getDangerouslySkipPermissions(): boolean {
+    return this.currentDangerouslySkipPermissions;
+  }
+
   stopHub(): void {
     this.clearKillEscalation();
     if (this.hubProcess) {
@@ -465,6 +517,7 @@ export class AgyHubManager {
       this.currentProfile = null;
       this.currentProjectId = null;
       this.vaultPath = null;
+      this.currentDangerouslySkipPermissions = false;
     }
   }
 

@@ -119,6 +119,8 @@ export class App {
   };
   workspace: any = {
     getLeavesOfType: jest.fn().mockReturnValue([]),
+    getActiveViewOfType: jest.fn().mockReturnValue(null),
+    getMostRecentLeaf: jest.fn().mockReturnValue(null),
     getRightLeaf: jest.fn().mockReturnValue({
       setViewState: jest.fn().mockResolvedValue(undefined),
     }),
