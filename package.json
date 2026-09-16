@@ -1,6 +1,6 @@
 {
   "name": "obsidian-antigravity",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "Obsidian plugin for autonomous vault management and intelligence powered by Google Antigravity (agy)",
   "main": "main.js",
   "scripts": {
