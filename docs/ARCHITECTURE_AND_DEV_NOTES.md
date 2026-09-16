@@ -112,9 +112,10 @@ flowchart TD
 ## 4. 安全防护与上下文注入机制 (Security & Prompt Layering)
 
 ### 4.1 权限控制与自动化执行安全门禁
-- **默认受限模式**：`agy --print` 默认**不携带** `--dangerously-skip-permissions`，处于 `request-review` 状态。非交互命令行下，任何试图越权执行 Shell 命令或未授权修改的 Tool Call 会被底层自动拦截，并在返回结果中追加 `[!WARNING] Restricted Execution` 提示。
-- **无限制模式双重确认**：只有在设置中显式开启 `allowUnrestrictedTasks`，且首次执行通过 [src/ui/ConfirmModal.ts](../src/ui/ConfirmModal.ts) 明确确认提示注入（Prompt Injection）与破坏性文件风险后，才允许向 CLI 注入 `--dangerously-skip-permissions`。
-- **常驻风险警示**：无限制模式下生成的所有结果，在 [src/ui/ResultModal.ts](../src/ui/ResultModal.ts) 顶部以红底常驻醒目标识 `.antigravity-risk-banner` 进行风险披露。
+- **默认受限模式**：`agy --print` 默认**不携带** `--dangerously-skip-permissions`，处于 `request-review` 状态。非交互命令行下，任何试图越权执行 Shell 命令或未授权修改的 Tool Call 会被底层自动拦截，并在返回结果中追加 `[!WARNING] Restricted Execution` 提示。Hub 轨同理：`startHub()` 仅在开关开启时才追加该 flag。
+- **无限制模式双重确认**：只有在设置中显式开启 `allowUnrestrictedTasks`，且通过 [src/ui/ConfirmModal.ts](../src/ui/ConfirmModal.ts) 明确确认提示注入（Prompt Injection）与破坏性文件风险后，才允许向 CLI 注入 `--dangerously-skip-permissions`。
+- **两条路径独立确认**：该开关同时作用于 Task 轨与 Hub 轨，但两者的确认**彼此独立**（`unrestrictedConfirmed` 与 `hubUnrestrictedConfirmed`）。原因是 Hub 是**交互式持续会话**：一次确认覆盖该会话存续期间的**全部**工具调用，风险面显著大于一次性任务，因此不能由任务轨的确认顺带授权。Hub 的确认文案同时说明「切换该设置会重启 daemon 并终止当前会话」。
+- **常驻风险警示**：无限制模式下生成的所有结果，在 [src/ui/ResultModal.ts](../src/ui/ResultModal.ts) 顶部以常驻醒目标识 `.antigravity-risk-banner` 进行风险披露。该横幅的**文字色刻意不使用** `--text-error`：在将两个 error token 映射为同一色相的主题（如 Omarchy）下，「红底 + 红字」会使横幅退化为一块不可读的空白色块。
 
 ### 4.2 规则路径与提示词路径净化
 - **规则路径越界拦截**：[src/core/VaultContext.ts](../src/core/VaultContext.ts) 的 `resolveSafeRulesPath` 严格校验解析后的绝对路径必须以 `vaultPath + path.sep` 开头。若检测到 `../../` 等跨库逃逸路径，立即触发 Obsidian `Notice` 警告并强制回退至根目录默认值 `AGENTS.md`。

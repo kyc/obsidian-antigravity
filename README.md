@@ -52,7 +52,7 @@ npm run build
 - **Vault context awareness** — The active note path, editor selection, or containing folder is extracted and passed to the agent automatically.
 - **Status bar control** — A live status indicator with a spinner, click to cancel a running task.
 - **Vault rules** — An `AGENTS.md` file is created and injected so the agent follows Obsidian conventions such as `[[wikilinks]]` and YAML frontmatter.
-- **Permission gating** — Background tasks run in restricted approval mode by default. Unrestricted autonomous execution is gated behind a setting, a confirmation dialog, and a persistent risk banner on results.
+- **Permission gating** — Tasks run in restricted approval mode by default, and the assistant web hub passes no permission bypass to its daemon. Unrestricted autonomous execution is gated behind a setting, a separate confirmation for each of the two paths (one-off tasks, and hub sessions), and a persistent risk banner on results.
 
 ---
 
@@ -81,9 +81,9 @@ Found under **Settings → Antigravity**.
 
 **Antigravity binary path** — Location of the `agy` executable. When empty, the plugin searches `~/.local/bin`, `/usr/local/bin`, `/usr/bin`, and your `PATH`. The **Verify binary** button runs `agy --version` to confirm the plugin can execute it.
 
-**Default model** — Model ID passed to `agy`. Choices are `gemini-3.8-flash-high`, `gemini-3.8-flash-medium`, `gemini-3.8-flash-low`, `gemini-3.7-flash-high`, `gemini-3.1-pro-high`, `gemini-3.1-pro-low`, and `claude-sonnet-4-6`.
+**Default model** — Model ID passed to `agy`. Run `agy models` to list the IDs your account can use. The dropdown offers `gemini-3.8-flash-high`, `gemini-3.8-flash-medium`, `gemini-3.8-flash-low`, `gemini-3.7-flash-high`, `gemini-3.7-flash-medium`, `gemini-3.7-flash-low`, `gemini-3.6-flash-high`, `gemini-3.6-flash-medium`, `gemini-3.6-flash-low`, `gemini-3.1-pro-high`, `gemini-3.1-pro-low`, `claude-sonnet-4-6`, `claude-opus-4-6-thinking`, and `gpt-oss-120b-medium`.
 
-**Reasoning effort** — Reasoning intensity passed via `--effort`: `none` (catalog default), `low`, `medium`, or `high`.
+Reasoning intensity is part of the model ID itself. `agy` rejects a `--model` carrying an `-high` / `-medium` / `-low` suffix when `--effort` is also supplied ("conflicts with --effort"), so the plugin sets the level through the model choice alone and never passes `--effort`.
 
 **Default agent** — Agent persona passed via `--agent`. Defaults to `omarchy-vault`.
 
@@ -100,7 +100,7 @@ Found under **Settings → Antigravity**.
 
 ### Vault tasks & security
 
-- **Allow unrestricted tasks** — Passes `--dangerously-skip-permissions` to auto-approve tool execution. Requires an explicit confirmation on first use. While disabled, dangerous operations are blocked in headless mode and reported as `denied_actions`.
+- **Allow unrestricted tasks** — Passes `--dangerously-skip-permissions` to auto-approve tool execution. Applies to **both** paths: background tasks (`agy --print`, headless) and the assistant web hub daemon (`agy --hub`, an interactive session). Each path asks for its own confirmation the first time it runs unrestricted. While disabled, dangerous operations are blocked in headless mode and reported as `denied_actions`. Note that toggling this setting restarts the hub daemon on the next open, which ends the current hub conversation.
 
 ![Plugin settings grouped into hub, vault rules, and task security](docs/images/settings-dark.png)
 

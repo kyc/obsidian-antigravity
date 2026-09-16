@@ -11,7 +11,7 @@ The plugin is completely decoupled from legacy multi-provider frameworks, focusi
 ```bash
 npm run typecheck    # Verify TypeScript types
 npm run lint         # Lint codebase with eslint-plugin-obsidianmd
-npm test         # Run Jest unit test suite (8 suites, 60 tests)
+npm test         # Run Jest unit test suite
 npm run build        # Production bundle to main.js (mirrors to vault only if OBSIDIAN_PLUGIN_PATH is set)
 npm run dev          # Watch mode with automatic rebuild
 ```
@@ -61,7 +61,10 @@ Unit tests mirror `src/` under `tests/unit/`.
 3. **Task Execution & Permission Safety Gating**:
    - Discrete tasks execute via official `agy --print <prompt> --output-format stream-json --add-dir <vaultPath>`.
    - By default, tasks run in restricted approval mode (no `--dangerously-skip-permissions`). Headless execution auto-blocks dangerous commands/file deletions and reports `denied_actions`.
-   - Autonomous execution requires enabling `allowUnrestrictedTasks`, passing an explicit `ConfirmModal` security warning, and displays a persistent warning banner on `ResultModal`.
+   - The same flag governs the hub daemon (`agy --hub`): `startHub()` appends `--dangerously-skip-permissions` only when `allowUnrestrictedTasks` is on, so the setting never silently widens hub permissions.
+   - Autonomous execution requires enabling `allowUnrestrictedTasks` **plus a confirmation per path** — `unrestrictedConfirmed` for one-off tasks, `hubUnrestrictedConfirmed` for the hub. They are deliberately separate: a hub session is interactive and multi-turn, so a single approval covers every tool call for its lifetime and must not be inherited from a task-level confirmation.
+   - Unrestricted runs display a persistent warning banner on `ResultModal`, whose text colour avoids `--text-error` so it stays legible on themes that map both error tokens to one hue.
+   - A CLI error that still produced output is delivered to the user with a `[!WARNING]` note rather than discarded; only a failure with no usable output rejects.
    - Run lifecycles are bound to unique `runId` instances (`ActiveTaskRun`), preventing delayed `'exit'` events from corrupting consecutive tasks.
 
 4. **Path Traversal Defense in Depth**:

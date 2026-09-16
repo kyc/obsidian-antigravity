@@ -52,7 +52,7 @@ npm run build
 - **库上下文感知** —— 自动提取当前笔记路径、编辑器选中文本或所在文件夹，并传递给 Agent。
 - **状态栏控制** —— 实时状态指示器与动态加载动画，点击即可取消运行中的任务。
 - **库规范规则** —— 自动创建并注入 `AGENTS.md`，确保 Agent 遵循 Obsidian 约定，例如 `[[双链]]` 与 YAML Frontmatter。
-- **权限门控** —— 后台任务默认运行于受限审批模式。无限制自主执行需依次通过设置开关、确认弹窗，且结果面板会持续显示风险横幅。
+- **权限门控** —— 任务默认运行于受限审批模式，Assistant Web Hub 亦不会向其后台服务传递权限绕过参数。无限制自主执行需依次通过设置开关、**两条路径各自独立的确认弹窗**（一次性任务、Hub 会话），且结果面板会持续显示风险横幅。
 
 ---
 
@@ -81,9 +81,9 @@ npm run build
 
 **Antigravity 可执行文件路径** —— `agy` 可执行文件的位置。留空时，插件会依次搜索 `~/.local/bin`、`/usr/local/bin`、`/usr/bin` 以及 `PATH`。**验证可执行文件** 按钮会运行 `agy --version` 以确认插件能够执行它。
 
-**默认模型** —— 传递给 `agy` 的模型 ID。可选值：`gemini-3.8-flash-high`、`gemini-3.8-flash-medium`、`gemini-3.8-flash-low`、`gemini-3.7-flash-high`、`gemini-3.1-pro-high`、`gemini-3.1-pro-low`、`claude-sonnet-4-6`。
+**默认模型** —— 传递给 `agy` 的模型 ID。可运行 `agy models` 查看当前账号可用的 ID。下拉框中提供：`gemini-3.8-flash-high`、`gemini-3.8-flash-medium`、`gemini-3.8-flash-low`、`gemini-3.7-flash-high`、`gemini-3.7-flash-medium`、`gemini-3.7-flash-low`、`gemini-3.6-flash-high`、`gemini-3.6-flash-medium`、`gemini-3.6-flash-low`、`gemini-3.1-pro-high`、`gemini-3.1-pro-low`、`claude-sonnet-4-6`、`claude-opus-4-6-thinking`、`gpt-oss-120b-medium`。
 
-**思考强度** —— 通过 `--effort` 传递的推理强度：`none`（目录默认）、`low`、`medium`、`high`。
+推理强度本身已包含在模型 ID 中。当 `--model` 带有 `-high` / `-medium` / `-low` 后缀时，若同时传入 `--effort`，`agy` 会直接拒绝执行（报「conflicts with --effort」）。因此插件仅通过模型选择来设定强度，不再传递 `--effort`。
 
 **默认 Agent** —— 通过 `--agent` 传递的 Agent 人格，默认为 `omarchy-vault`。
 
@@ -100,7 +100,7 @@ npm run build
 
 ### 库任务与安全
 
-- **允许无限制执行任务** —— 传递 `--dangerously-skip-permissions` 以自动批准工具调用。首次使用需显式确认。禁用时，无头模式下的危险操作会被拦截，并以 `denied_actions` 形式回报。
+- **允许无限制执行任务** —— 传递 `--dangerously-skip-permissions` 以自动批准工具调用。该开关同时作用于**两条路径**：后台任务（`agy --print`，无头执行）与 Assistant Web Hub 后台服务（`agy --hub`，交互式会话）。两条路径首次以无限制模式运行时各自需要一次确认。禁用时，无头模式下的危险操作会被拦截，并以 `denied_actions` 形式回报。注意：切换该开关会在下次打开 Hub 时重启后台服务，当前 Hub 会话将随之结束。
 
 ![插件设置：Hub、库规范规则与任务安全分组](docs/images/settings-dark.png)
 

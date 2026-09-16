@@ -18,7 +18,7 @@
 
 > 评审日期：2026-09
 > 评审对象：`obsidian-antigravity` @ `d129b722`
-> 评审基线：`npm run typecheck` 通过 · `npx eslint src/` 0 error 0 warning · `npm run test` 26 tests / 7 suites 全绿（**当时的数字**；当前为 8 suites / 60 tests）
+> 评审基线：`npm run typecheck` 通过 · `npx eslint src/` 0 error 0 warning · `npm run test` 全绿。（具体测试数量刻意不在此记录：此类精确数字必然随每次改动腐烂，本文件已有过因此失实的先例。）
 > 评审方法：先通读 `docs/ARCHITECTURE_AND_DEV_NOTES.md` 与 `README.md` 建立架构意图，再逐文件审阅 14 个源文件；对高影响问题编写临时复现脚本实证，验证后已清理。
 
 ---
@@ -40,12 +40,14 @@
 | 🟡 | 6 | Chat 轨完成后状态栏残留 | 调用图确证 | **已彻底解决**：Chat 轨移除；Task 轨状态闭环，任务异常 6 秒后自动重置为 `idle` |
 | 🟡 | 7 | 会话无持久化，切换标签即丢失 | 代码确证 | **已自然闭环**：废弃脆弱的 CLI 侧边栏，全面依托官方 Hub（自带 SQLite/文件系统多会话持久化） |
 | 🟡 | 8 | `loadSettings` 的 `undefined` 覆盖默认值 | 代码确证 | **已彻底解决**：引入纯函数 `validateSettings`，强制运行时字段类型守卫与默认值兜底 |
-| 🟡 | 9 | `--effort` 与模型名后缀耦合 | 代码确证 | **已彻底解决**：移除脆弱的子串猜测，只要 `effort !== 'none'` 即显式透传 `--effort` |
+| 🟡 | 9 | `--effort` 与模型名后缀耦合 | 代码确证 | ⚠️ **原结论有误，2026-09-16 更正**：删除子串猜测并未解决问题，见 §4.4 |
 | 🟡 | 11 | 触摸目标 28×28 < 44×44 | 代码确证 | **已彻底解决**：旧 Chat 界面移除，模态框与状态栏按钮符合 Obsidian 桌面规范 |
 | 🟡 | 12 | 裸 `window` 破坏 popout 兼容 | 代码确证 | **已合规解决**：遵循 `prefer-window-timers` 规范，UI 操作优先绑定 `activeWindow` |
 | 🟢 | 13 | Node 模块无 `Platform.isDesktop` 守卫 | 已知妥协，不建议改 | **已知架构决策**：`manifest.json` 已锁定 `"isDesktopOnly": true` |
 
-> **闭环验证**：截至 2026-09-14，全套测试全绿，`npm run lint` 实现 0 错误 0 警告，代码审查问题已全部闭环。（当时数字为 7 suites / 46 tests，现为 8 suites / 60 tests；另于 2026-09 追加修复了 `VaultTaskRunner` 与 `AgyProcess` 的定时器句柄泄漏问题。）
+> **闭环验证**：截至 2026-09-14，全套测试全绿，`npm run lint` 实现 0 错误 0 警告。（另于 2026-09 追加修复了 `VaultTaskRunner` 与 `AgyProcess` 的定时器句柄泄漏问题。此处原记有精确测试数，因三处文档互相矛盾而移除——见下方教训。）
+>
+> ⚠️ **但「问题已全部闭环」这一判断是错的。** 2026-09-16 的实机排查发现，本表第 9 条被错误地标记为已解决（见 §4.4），且该错误结论持续掩盖了一个用户必然会触发的故障。更值得记录的是教训本身：**测试全绿与代码可读，都不等于行为正确**。上述若干问题属于「参数组合在特定设置下必然失败」这一类，静态的类型检查与单元测试无法覆盖，只有实机运行才能暴露。后续对同类结论应要求实机证据，而非仅凭代码审阅定案。
 
 ---
 
@@ -65,6 +67,8 @@
 
 - **Hub 是官方打包的 Angular SPA**，模型选择器与推理强度由 SPA 自身管理。`--model` / `--effort` 是 **Chat 轨专有**的 CLI 参数，Hub 轨不传这些参数是**正确设计**，不是缺陷。
   > 评审过程中曾误判此处为「model/effort 不作用于 Hub」的缺陷，经澄清后**已撤回**。参见 §6 复盘。
+  >
+  > 补充（2026-09-16）：该结论中的「推理强度由 SPA 自身管理」仍成立，但 Chat 轨已删除，`--effort` 亦已从插件中彻底移除，见 §4.4。
 - **三项不可调和的架构妥协**（文档 §7.2）：桌面锁定、Vault 外文件访问、iframe 与原生 UI 契约脱节。这些是已知取舍，不应作为缺陷重复计分。
 
 ### 1.3 Hub 轨逆向工程成果（文档 §3，予以肯定）
@@ -255,7 +259,9 @@ this.settings = Object.assign({}, DEFAULT_SETTINGS, (await this.loadData()) as P
 
 ### 4.4 `--effort` 与模型名后缀耦合
 
-`AgySession.ts:121` 与 `VaultTaskRunner.ts:66`：
+> **更正（2026-09-16）**：本节原判为「已彻底解决」，**该结论是错的**。移除子串猜测只是让代码变得可读，并未消除冲突——恰恰相反，它把冲突从「偶尔漏传参数」变成了「必然失败」。讽刺的是，这个错误的闭环结论在此后数月中掩盖了真实的用户级故障，直到一次实机排查才暴露。
+
+`AgySession.ts:121` 与 `VaultTaskRunner.ts:66`（修复前）：
 
 ```ts
 if (effort && effort !== 'none' && !model.includes(`-${effort}`)) {
@@ -264,6 +270,26 @@ if (effort && effort !== 'none' && !model.includes(`-${effort}`)) {
 ```
 
 用字符串包含判断去重。副作用：任何名称恰好含 `-low` / `-high` 的模型都会意外吞掉该 flag。两轨均在使用，建议改为显式白名单或让设置项联动。
+
+**当时的修复**：去掉 `!model.includes(...)`，改为只要 `effort !== 'none'` 就透传 `--effort`。
+
+**真实缺陷**：`agy` 把推理强度视为模型 ID 的一部分。模型目录中全部 14 个 ID 都自带 `-high` / `-medium` / `-low` 后缀，因此**任何**非 `none` 的 `effort` 都会与模型名冲突：
+
+```
+$ agy --print "hi" --model gemini-3.8-flash-high --effort low
+invalid model selection (--model "gemini-3.8-flash-high" --effort "low"):
+  --model gemini-3.8-flash-high conflicts with --effort=low
+```
+
+反向同样成立——不带后缀的 `gemini-3.8-flash` 在**缺失** `--effort` 时也会被拒：
+
+```
+--model gemini-3.8-flash requires --effort (available: low, medium, high)
+```
+
+即两种模型形式要求互斥的参数组合，而设置 UI 允许用户构造出必然失败的那一种。从日志可确认这是真实发生的用户级故障（`printmode.go:266`），而非理论推演。
+
+**最终处置**：移除「思考强度」设置项，推理强度完全由模型选择决定，插件不再传递 `--effort`。同时 `VaultTaskRunner` 增加对该类 CLI 失败的识别与可读提示。
 
 ### 4.5 触摸目标小于 44×44
 
@@ -331,8 +357,10 @@ if (effort && effort !== 'none' && !model.includes(`-${effort}`)) {
 
 ### 第三梯队：体验与规范
 
-5. §4.2 历史持久化、§4.3 设置合并、§4.4 `--effort` 耦合
+5. §4.2 历史持久化、§4.3 设置合并
 6. §4.5 触摸目标、§4.6 popout 兼容
+
+> §4.4 原被列入本梯队，但当时的「修复」并未消除缺陷，反而使其成为必然失败路径。该问题已由 2026-09-16 的实机排查重新定案并处理，见 §4.4。
 
 ### 仅文档澄清
 
