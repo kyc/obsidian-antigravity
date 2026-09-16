@@ -123,6 +123,24 @@ export function ensureVaultProject(vaultPath: string, homeDir: string = os.homed
       fs.mkdirSync(configProjectsDir, { recursive: true, mode: 0o755 });
     }
 
+    let existingSettings: Record<string, unknown> = {};
+    if (fs.existsSync(projectFile)) {
+      try {
+        const raw: unknown = JSON.parse(fs.readFileSync(projectFile, 'utf8'));
+        if (
+          typeof raw === 'object' &&
+          raw !== null &&
+          'settings' in raw &&
+          typeof (raw as Record<string, unknown>).settings === 'object' &&
+          (raw as Record<string, unknown>).settings !== null
+        ) {
+          existingSettings = (raw as { settings: Record<string, unknown> }).settings;
+        }
+      } catch {
+        // Fallback to empty settings
+      }
+    }
+
     const projectData = {
       id: projectId,
       name: projectName,
@@ -135,7 +153,7 @@ export function ensureVaultProject(vaultPath: string, homeDir: string = os.homed
           },
         ],
       },
-      settings: {},
+      settings: existingSettings,
       isWorkspaceOnly: false,
     };
 
@@ -166,10 +184,84 @@ export function ensureDefaultProjectId(profile: string, projectId: string, homeD
   }
 }
 
-export function ensureProfileInitialized(profile: string, homeDir: string = os.homedir()): boolean {
+export function ensureProfileSettings(
+  profile: string,
+  vaultPath?: string,
+  homeDir: string = os.homedir(),
+): boolean {
+  const safeProfile = sanitizeProfile(profile);
+  if (!safeProfile || safeProfile === 'antigravity-cli') {
+    return false;
+  }
+
+  const targetDir = path.join(homeDir, '.gemini', safeProfile);
+  const targetSettingsFile = path.join(targetDir, 'settings.json');
+
+  try {
+    if (!fs.existsSync(targetDir)) {
+      fs.mkdirSync(targetDir, { recursive: true, mode: 0o700 });
+    }
+
+    let settings: Record<string, unknown> = {};
+    if (fs.existsSync(targetSettingsFile)) {
+      try {
+        const raw: unknown = JSON.parse(fs.readFileSync(targetSettingsFile, 'utf8'));
+        if (typeof raw === 'object' && raw !== null) {
+          settings = raw as Record<string, unknown>;
+        }
+      } catch {
+        settings = {};
+      }
+    } else {
+      const candidateSources = [
+        path.join(homeDir, '.gemini', 'antigravity-cli', 'settings.json'),
+        path.join(homeDir, '.gemini', 'antigravity', 'settings.json'),
+        path.join(homeDir, '.gemini', 'antigravity-ide', 'settings.json'),
+      ];
+      for (const src of candidateSources) {
+        if (fs.existsSync(src)) {
+          try {
+            const raw: unknown = JSON.parse(fs.readFileSync(src, 'utf8'));
+            if (typeof raw === 'object' && raw !== null) {
+              settings = raw as Record<string, unknown>;
+              break;
+            }
+          } catch {
+            // Non-critical, try next candidate
+          }
+        }
+      }
+    }
+
+    if (vaultPath) {
+      const normalizedVault = path.resolve(vaultPath);
+      const trusted = Array.isArray(settings.trustedWorkspaces)
+        ? (settings.trustedWorkspaces as string[])
+        : [];
+      if (!trusted.includes(normalizedVault)) {
+        settings.trustedWorkspaces = [...trusted, normalizedVault];
+      }
+    }
+
+    fs.writeFileSync(targetSettingsFile, JSON.stringify(settings, null, 2), {
+      encoding: 'utf8',
+      mode: 0o600,
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function ensureProfileInitialized(
+  profile: string,
+  vaultPath?: string,
+  homeDir: string = os.homedir(),
+): boolean {
   const safeProfile = sanitizeProfile(profile);
   const auth = ensureProfileAuth(safeProfile, homeDir);
   ensureProfileOnboarding(safeProfile, homeDir);
+  ensureProfileSettings(safeProfile, vaultPath, homeDir);
   return auth;
 }
 
@@ -243,7 +335,7 @@ export class AgyHubManager {
       const port = preferredPort > 0 ? preferredPort : await this.getFreePort();
       const projectId = ensureVaultProject(vaultPath);
       ensureDefaultProjectId(safeProfile, projectId);
-      ensureProfileInitialized(safeProfile);
+      ensureProfileInitialized(safeProfile, vaultPath);
 
       const args = [
         '--hub',
@@ -351,6 +443,7 @@ export class AgyHubManager {
     if (hostTheme) {
       params.set('hostTheme', hostTheme);
     }
+    params.set('useWebSocket', 'true');
     const query = params.toString();
     return `http://127.0.0.1:${port}/${query ? `?${query}` : ''}`;
   }

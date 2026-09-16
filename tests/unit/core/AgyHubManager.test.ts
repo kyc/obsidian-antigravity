@@ -6,7 +6,9 @@ import {
   AgyHubManager,
   ensureDefaultProjectId,
   ensureProfileAuth,
+  ensureProfileInitialized,
   ensureProfileOnboarding,
+  ensureProfileSettings,
   ensureVaultProject,
 } from '../../../src/core/AgyHubManager';
 
@@ -26,24 +28,25 @@ describe('AgyHubManager', () => {
       expect(hubManager.getHubUrl()).toBe('');
     });
 
-    it('returns clean base url without extension bridge query params', () => {
+    it('returns base url with useWebSocket=true without extension bridge query params', () => {
       // Simulate active port via internal state or start
       (hubManager as unknown as { port: number }).port = 41891;
 
       const url = hubManager.getHubUrl();
-      expect(url).toBe('http://127.0.0.1:41891/');
+      expect(url).toBe('http://127.0.0.1:41891/?useWebSocket=true');
+      expect(url).toContain('useWebSocket=true');
       expect(url).not.toContain('extensionView');
       expect(url).not.toContain('extensionVariant');
     });
 
-    it('appends hostTheme when provided in options', () => {
+    it('appends hostTheme and useWebSocket=true when provided in options', () => {
       (hubManager as unknown as { port: number }).port = 41891;
 
       const darkUrl = hubManager.getHubUrl({ hostTheme: 'dark' });
-      expect(darkUrl).toBe('http://127.0.0.1:41891/?hostTheme=dark');
+      expect(darkUrl).toBe('http://127.0.0.1:41891/?hostTheme=dark&useWebSocket=true');
 
       const lightUrl = hubManager.getHubUrl({ hostTheme: 'light' });
-      expect(lightUrl).toBe('http://127.0.0.1:41891/?hostTheme=light');
+      expect(lightUrl).toBe('http://127.0.0.1:41891/?hostTheme=light&useWebSocket=true');
     });
   });
 
@@ -378,6 +381,25 @@ describe('AgyHubManager', () => {
       expect(id1).toMatch(/^obsidian-vault-[a-f0-9]{8}$/);
       expect(id2).toMatch(/^obsidian-vault-[a-f0-9]{8}$/);
     });
+    it('preserves existing settings when project file already exists', () => {
+      const vaultPath = '/home/user/ObsidianVault';
+      const projectId = ensureVaultProject(vaultPath, tmpDir);
+      const projectFile = path.join(tmpDir, '.gemini', 'config', 'projects', `${projectId}.json`);
+
+      // Write custom settings
+      const original = JSON.parse(fs.readFileSync(projectFile, 'utf8'));
+      original.settings = { artifactReviewMode: 'ARTIFACT_REVIEW_MODE_TURBO', customKey: true };
+      fs.writeFileSync(projectFile, JSON.stringify(original, null, 2), 'utf8');
+
+      // Re-run ensureVaultProject
+      ensureVaultProject(vaultPath, tmpDir);
+
+      const updated = JSON.parse(fs.readFileSync(projectFile, 'utf8'));
+      expect(updated.settings).toEqual({
+        artifactReviewMode: 'ARTIFACT_REVIEW_MODE_TURBO',
+        customKey: true,
+      });
+    });
   });
 
   describe('ensureDefaultProjectId', () => {
@@ -396,6 +418,67 @@ describe('AgyHubManager', () => {
       const targetFile = path.join(tmpDir, '.gemini', 'test-profile', 'cache', 'default_project_id.txt');
       expect(fs.existsSync(targetFile)).toBe(true);
       expect(fs.readFileSync(targetFile, 'utf8')).toBe('obsidian-myvault');
+    });
+  });
+
+  describe('ensureProfileSettings', () => {
+    let tmpDir: string;
+
+    beforeEach(() => {
+      tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agy-settings-test-'));
+    });
+
+    afterEach(() => {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    it('returns false for antigravity-cli profile', () => {
+      expect(ensureProfileSettings('antigravity-cli', undefined, tmpDir)).toBe(false);
+    });
+
+    it('seeds settings.json from antigravity-cli candidate when missing', () => {
+      const cliDir = path.join(tmpDir, '.gemini', 'antigravity-cli');
+      fs.mkdirSync(cliDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(cliDir, 'settings.json'),
+        JSON.stringify({ permissionMode: 'always-proceed', permissions: { allow: ['command(git)'] } }),
+      );
+
+      const result = ensureProfileSettings('test-obsidian', undefined, tmpDir);
+      expect(result).toBe(true);
+
+      const targetFile = path.join(tmpDir, '.gemini', 'test-obsidian', 'settings.json');
+      expect(fs.existsSync(targetFile)).toBe(true);
+      const parsed = JSON.parse(fs.readFileSync(targetFile, 'utf8'));
+      expect(parsed.permissionMode).toBe('always-proceed');
+      expect(parsed.permissions.allow).toEqual(['command(git)']);
+    });
+
+    it('adds normalized vaultPath to trustedWorkspaces', () => {
+      const vaultPath = '/home/user/ObsidianVault';
+      const result = ensureProfileSettings('test-obsidian', vaultPath, tmpDir);
+      expect(result).toBe(true);
+
+      const targetFile = path.join(tmpDir, '.gemini', 'test-obsidian', 'settings.json');
+      const parsed = JSON.parse(fs.readFileSync(targetFile, 'utf8'));
+      expect(parsed.trustedWorkspaces).toContain(path.resolve(vaultPath));
+    });
+
+    it('does not duplicate existing trustedWorkspaces', () => {
+      const vaultPath = '/home/user/ObsidianVault';
+      const normalized = path.resolve(vaultPath);
+      const targetDir = path.join(tmpDir, '.gemini', 'test-obsidian');
+      fs.mkdirSync(targetDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(targetDir, 'settings.json'),
+        JSON.stringify({ trustedWorkspaces: [normalized] }),
+      );
+
+      ensureProfileSettings('test-obsidian', vaultPath, tmpDir);
+
+      const targetFile = path.join(targetDir, 'settings.json');
+      const parsed = JSON.parse(fs.readFileSync(targetFile, 'utf8'));
+      expect(parsed.trustedWorkspaces).toEqual([normalized]);
     });
   });
 });
