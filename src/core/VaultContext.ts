@@ -18,8 +18,47 @@ export class VaultContext {
     return null;
   }
 
+  /**
+   * Resolves the note the user was working in.
+   *
+   * `getActiveViewOfType` reflects the view that currently holds focus, which
+   * stops being the note as soon as the command palette opens. Falling back to
+   * the most recent leaf keeps the context the user saw before invoking the
+   * command, instead of silently degrading to a vault-wide task.
+   */
+  /**
+   * Resolves the note the user is working on, tolerating the command palette
+   * (and other transient focus grabs) having taken focus away from the editor.
+   *
+   * Public because command `checkCallback`s must gate on the same notion of
+   * "current note" that execution uses — otherwise a command can be greyed out
+   * in the very command-palette flow it exists for, while its callback would
+   * have resolved a context perfectly well.
+   */
+  resolveMarkdownView(): MarkdownView | null {
+    const active = this.app.workspace.getActiveViewOfType(MarkdownView);
+    if (active?.file) {
+      return active;
+    }
+
+    const candidates = [
+      this.app.workspace.getMostRecentLeaf()?.view,
+      ...this.app.workspace.getLeavesOfType('markdown').map((leaf) => leaf.view),
+    ];
+
+    for (const view of candidates) {
+      // Duck-typed rather than `instanceof`: Obsidian ships one MarkdownView
+      // class per app instance, so identity checks are unreliable.
+      if (view?.getViewType?.() === 'markdown' && (view as MarkdownView).file) {
+        return view as MarkdownView;
+      }
+    }
+
+    return null;
+  }
+
   getActiveContext(): TaskContext {
-    const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
+    const activeView = this.resolveMarkdownView();
     if (!activeView || !activeView.file) {
       return { scope: 'vault' };
     }

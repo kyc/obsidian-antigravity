@@ -13,9 +13,87 @@ describe('VaultContext', () => {
       },
       workspace: {
         getActiveViewOfType: jest.fn().mockReturnValue(null),
+        getMostRecentLeaf: jest.fn().mockReturnValue(null),
+        getLeavesOfType: jest.fn().mockReturnValue([]),
       },
     };
     vaultContext = new VaultContext(mockApp);
+  });
+
+  describe('getActiveContext', () => {
+    const markdownView = (file: any, editor?: any) => ({
+      getViewType: () => 'markdown',
+      file,
+      editor,
+    });
+
+    it('falls back to the most recent leaf when the command palette holds focus', () => {
+      // Opening the command palette moves focus away from the note, so
+      // getActiveViewOfType returns null even though the user was editing.
+      mockApp.workspace.getActiveViewOfType.mockReturnValue(null);
+      mockApp.workspace.getMostRecentLeaf.mockReturnValue({
+        view: markdownView({ path: 'Notes/Target.md' }, { getSelection: () => '', getValue: () => 'body' }),
+      });
+
+      expect(vaultContext.getActiveContext()).toEqual({
+        scope: 'active-note',
+        filePath: 'Notes/Target.md',
+        fileContent: 'body',
+      });
+    });
+
+    it('preserves the selection scope through the fallback path', () => {
+      mockApp.workspace.getActiveViewOfType.mockReturnValue(null);
+      mockApp.workspace.getMostRecentLeaf.mockReturnValue({
+        view: markdownView(
+          { path: 'Notes/Target.md' },
+          { getSelection: () => 'picked text', getValue: () => 'full body' },
+        ),
+      });
+
+      expect(vaultContext.getActiveContext()).toEqual({
+        scope: 'selection',
+        filePath: 'Notes/Target.md',
+        selectionText: 'picked text',
+        fileContent: 'full body',
+      });
+    });
+
+    it('scans open markdown leaves when no recent leaf is a note', () => {
+      mockApp.workspace.getActiveViewOfType.mockReturnValue(null);
+      mockApp.workspace.getMostRecentLeaf.mockReturnValue(null);
+      mockApp.workspace.getLeavesOfType.mockReturnValue([
+        { view: { getViewType: () => 'antigravity-hub-view' } },
+        { view: markdownView({ path: 'Notes/Open.md' }, { getSelection: () => '', getValue: () => 'x' }) },
+      ]);
+
+      expect(vaultContext.getActiveContext()).toEqual({
+        scope: 'active-note',
+        filePath: 'Notes/Open.md',
+        fileContent: 'x',
+      });
+    });
+
+    it('only reports a vault-wide task when no note is open at all', () => {
+      mockApp.workspace.getActiveViewOfType.mockReturnValue(null);
+      mockApp.workspace.getMostRecentLeaf.mockReturnValue({
+        view: { getViewType: () => 'antigravity-hub-view' },
+      });
+      mockApp.workspace.getLeavesOfType.mockReturnValue([]);
+
+      expect(vaultContext.getActiveContext()).toEqual({ scope: 'vault' });
+    });
+
+    it('prefers the focused view over the most recent leaf', () => {
+      mockApp.workspace.getActiveViewOfType.mockReturnValue(
+        markdownView({ path: 'Notes/Focused.md' }, { getSelection: () => '', getValue: () => 'f' }),
+      );
+      mockApp.workspace.getMostRecentLeaf.mockReturnValue({
+        view: markdownView({ path: 'Notes/Stale.md' }, { getSelection: () => '', getValue: () => 's' }),
+      });
+
+      expect(vaultContext.getActiveContext().filePath).toBe('Notes/Focused.md');
+    });
   });
 
   describe('formatPromptWithContext', () => {

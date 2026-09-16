@@ -1,7 +1,6 @@
 export interface AntigravityPluginSettings {
   cliPath: string;
   model: string;
-  effort: 'low' | 'medium' | 'high' | 'none';
   hubPort: number;
   autoStartHub: boolean;
   hubProfile: string;
@@ -10,13 +9,18 @@ export interface AntigravityPluginSettings {
   customRulesPath: string;
   allowUnrestrictedTasks: boolean;
   unrestrictedConfirmed: boolean;
+  /**
+   * Tracked separately from `unrestrictedConfirmed`: the hub is an interactive
+   * multi-turn session, so approving it is a larger commitment than approving a
+   * single headless task. Confirming one must not silently authorise the other.
+   */
+  hubUnrestrictedConfirmed: boolean;
   language: 'auto' | 'en' | 'zh-cn' | 'zh-tw';
 }
 
 export const DEFAULT_SETTINGS: AntigravityPluginSettings = {
   cliPath: '',
   model: 'gemini-3.8-flash-high',
-  effort: 'none',
   hubPort: 0,
   autoStartHub: false,
   hubProfile: 'antigravity-obsidian',
@@ -25,6 +29,7 @@ export const DEFAULT_SETTINGS: AntigravityPluginSettings = {
   customRulesPath: 'AGENTS.md',
   allowUnrestrictedTasks: false,
   unrestrictedConfirmed: false,
+  hubUnrestrictedConfirmed: false,
   language: 'auto',
 };
 
@@ -42,10 +47,6 @@ export function validateSettings(raw: unknown): AntigravityPluginSettings {
 
   if (typeof data.model === 'string' && data.model.trim().length > 0) {
     result.model = data.model.trim();
-  }
-
-  if (typeof data.effort === 'string' && ['low', 'medium', 'high', 'none'].includes(data.effort)) {
-    result.effort = data.effort as AntigravityPluginSettings['effort'];
   }
 
   if (
@@ -85,6 +86,10 @@ export function validateSettings(raw: unknown): AntigravityPluginSettings {
     result.unrestrictedConfirmed = data.unrestrictedConfirmed;
   }
 
+  if (typeof data.hubUnrestrictedConfirmed === 'boolean') {
+    result.hubUnrestrictedConfirmed = data.hubUnrestrictedConfirmed;
+  }
+
   if (
     typeof data.language === 'string' &&
     ['auto', 'en', 'zh-cn', 'zh-tw'].includes(data.language.toLowerCase())
@@ -109,7 +114,6 @@ export interface TaskExecutionOptions {
   prompt: string;
   context: TaskContext;
   model?: string;
-  effort?: 'low' | 'medium' | 'high' | 'none';
 }
 
 export type ProcessState = 'idle' | 'running' | 'error';

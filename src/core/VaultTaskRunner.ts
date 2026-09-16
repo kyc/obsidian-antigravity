@@ -22,6 +22,31 @@ interface ActiveTaskRun {
 /** How long an error state stays visible before reverting to idle. */
 const ERROR_STATE_RESET_MS = 6000;
 
+/** How much of the process's stderr tail to retain for failure reporting. */
+const STDERR_TAIL_LIMIT = 4000;
+
+/**
+ * Signatures of CLI startup failures that surface as a bare exit code. Without
+ * this mapping the user sees something like "model selection error" for what is
+ * actually an expired credential, or a filesystem problem.
+ */
+const CLI_FAILURE_HINTS: Array<{ pattern: RegExp; key: string }> = [
+  // The CLI treats the model's -high/-medium/-low suffix as the reasoning
+  // level, and rejects any pairing of it with an explicit --effort.
+  { pattern: /conflicts with --effort/i, key: 'errors.modelEffortConflict' },
+  { pattern: /requires --effort/i, key: 'errors.modelNeedsEffort' },
+  { pattern: /invalid model selection/i, key: 'errors.modelUnavailable' },
+  { pattern: /not in local config/i, key: 'errors.modelUnavailable' },
+  // Matched on the specific phrase rather than the generic
+  // "error getting token source" wrapper: that wrapper also appears at W level
+  // during otherwise healthy startup (measured here: 452 W vs 488 E lines), so
+  // pairing it with an unrelated failure would send users to re-authenticate
+  // for the wrong reason. The specific phrase only accompanies a real logout.
+  { pattern: /not logged into antigravity/i, key: 'errors.notAuthenticated' },
+  { pattern: /read-only file system/i, key: 'errors.readOnlyProfile' },
+  { pattern: /unable to open database file/i, key: 'errors.profileUnwritable' },
+];
+
 export class VaultTaskRunner {
   private nextRunId = 0;
   private currentRun: ActiveTaskRun | null = null;
@@ -61,7 +86,6 @@ export class VaultTaskRunner {
     const formattedPrompt = this.vaultContext.formatPromptWithContext(options.prompt, options.context);
 
     const model = options.model || settings.model || 'gemini-3.8-flash-high';
-    const effort = options.effort || settings.effort || 'none';
 
     const args: string[] = [
       '--print',
@@ -83,10 +107,6 @@ export class VaultTaskRunner {
       args.push('--model', model);
     }
 
-    if (effort && effort !== 'none') {
-      args.push('--effort', effort);
-    }
-
     if (settings.defaultAgent) {
       args.push('--agent', settings.defaultAgent);
     }
@@ -97,18 +117,16 @@ export class VaultTaskRunner {
     return new Promise<string>((resolve, reject) => {
       let accumulatedOutput = '';
       let stdoutBuffer = '';
-      let lastNoticeTime = 0;
 
+      // Tool progress is surfaced through the status bar and the progress
+      // callback only. A single task can invoke dozens of tools, so raising a
+      // toast per call would bury the notices that actually matter (completion,
+      // cancellation, failure).
       const notifyProgress = (event: TaskProgressEvent) => {
         if (this.currentRun?.runId !== runId) return;
         onProgress?.(event);
         if (event.type === 'tool' || event.type === 'status') {
           this.updateStatus('running', event.message);
-          const now = Date.now();
-          if (now - lastNoticeTime > 4000) {
-            new Notice(`[Antigravity] ${event.message}`);
-            lastNoticeTime = now;
-          }
         }
       };
 
@@ -131,6 +149,7 @@ export class VaultTaskRunner {
 
         let terminalError: string | null = null;
         let resultResponse: string | null = null;
+        let stderrTail = '';
 
         child.stdout?.on('data', (chunk: Buffer) => {
           if (this.currentRun?.runId !== runId) return;
@@ -177,6 +196,10 @@ export class VaultTaskRunner {
         child.stderr?.on('data', (chunk: Buffer) => {
           if (this.currentRun?.runId !== runId) return;
           const stderrText = chunk.toString('utf8');
+          // Retain a bounded tail so a failure can report the real cause rather
+          // than only the exit code. The CLI emits a lot of startup noise, so
+          // the last lines are the ones that matter.
+          stderrTail = (stderrTail + stderrText).slice(-STDERR_TAIL_LIMIT);
           if (stderrText.toLowerCase().includes('error')) {
             notifyProgress({ type: 'status', message: stderrText.trim() });
           }
@@ -208,6 +231,8 @@ export class VaultTaskRunner {
             return;
           }
 
+          const partial = resultResponse ?? accumulatedOutput.trim();
+
           if (code === 0 && !terminalError) {
             if (isCurrent) {
               this.currentRun = null;
@@ -215,15 +240,35 @@ export class VaultTaskRunner {
               notifyProgress({ type: 'done', message: t('notices.taskCompletedProgress') });
               new Notice(t('notices.taskCompleted'));
             }
-            resolve(resultResponse ?? accumulatedOutput.trim());
-          } else {
-            const errorMsg = terminalError || t('notices.processExitError', { code });
+            resolve(partial);
+            return;
+          }
+
+          // The CLI can report a failure after the agent has already produced a
+          // complete answer — a transient 503 during teardown is the common
+          // case. Discarding that answer loses real work, so deliver it with a
+          // warning instead, mirroring how denied_actions is surfaced above.
+          if (partial) {
             if (isCurrent) {
               this.currentRun = null;
-              this.setErrorStatus(errorMsg);
+              this.updateStatus('idle');
+              new Notice(t('notices.taskCompletedWithWarning'));
             }
-            reject(new Error(errorMsg));
+            resolve(
+              `${partial}\n\n> [!WARNING] ${t('resultModal.partialResultWarning', {
+                detail: terminalError ?? t('notices.processExitError', { code: code ?? 'unknown' }),
+              })}`,
+            );
+            return;
           }
+
+          const errorMsg = terminalError
+            ?? this.describeCliFailure(code, stderrTail, accumulatedOutput);
+          if (isCurrent) {
+            this.currentRun = null;
+            this.setErrorStatus(errorMsg);
+          }
+          reject(new Error(errorMsg));
         });
       } catch (err) {
         if (this.currentRun?.runId === runId) {
@@ -281,6 +326,42 @@ export class VaultTaskRunner {
         this.updateStatus('idle');
       }
     }, ERROR_STATE_RESET_MS);
+  }
+
+  /**
+   * Turns a failed CLI exit into something the user can act on.
+   *
+   * The CLI writes a large amount of startup noise to stderr, and the genuine
+   * cause is often a single line inside it. Reporting only the exit code makes
+   * every distinct failure look identical, so this scans the captured output for
+   * known signatures and falls back to the last meaningful stderr line.
+   */
+  private describeCliFailure(code: number | null, stderrTail: string, stdout: string): string {
+    const haystack = `${stderrTail}\n${stdout}`;
+    for (const hint of CLI_FAILURE_HINTS) {
+      if (hint.pattern.test(haystack)) {
+        return t(hint.key as Parameters<typeof t>[0]);
+      }
+    }
+
+    const lastMeaningful = stderrTail
+      .split('\n')
+      .map((line) => line.trim())
+      // Structured CLI logs are prefixed with a severity letter and a 4-digit
+      // MMDD stamp (`I0916`, `E1201`). Matching a literal `I0`/`W0` prefix would
+      // silently stop filtering noise from October onward, so match the shape
+      // rather than one month range.
+      .filter((line) => line.length > 0 && !/^[IW]\d{4}\s/.test(line))
+      .pop();
+
+    if (lastMeaningful) {
+      return t('notices.processExitWithDetail', {
+        code: code ?? 'unknown',
+        detail: lastMeaningful.slice(0, 300),
+      });
+    }
+
+    return t('notices.processExitError', { code });
   }
 
   private handleStreamEvent(event: StreamEvent, emit: (event: TaskProgressEvent) => void): void {

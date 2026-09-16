@@ -27,13 +27,11 @@ describe('validateSettings', () => {
     expect(validateSettings({ hubPort: 65535 }).hubPort).toBe(65535);
   });
 
-  it('validates effort enum and falls back to default on invalid values', () => {
-    expect(validateSettings({ effort: 'ULTRA' }).effort).toBe('none');
-    expect(validateSettings({ effort: 123 }).effort).toBe('none');
-    expect(validateSettings({ effort: 'low' }).effort).toBe('low');
-    expect(validateSettings({ effort: 'medium' }).effort).toBe('medium');
-    expect(validateSettings({ effort: 'high' }).effort).toBe('high');
-    expect(validateSettings({ effort: 'none' }).effort).toBe('none');
+  it('drops the legacy effort field from persisted settings', () => {
+    // Reasoning level is baked into the model ID, and passing --effort
+    // alongside a suffixed model makes the CLI reject the whole selection.
+    const validated = validateSettings({ effort: 'high' });
+    expect(Object.prototype.hasOwnProperty.call(validated, 'effort')).toBe(false);
   });
 
   it('validates autoStartHub boolean and falls back on non-boolean', () => {
@@ -58,10 +56,24 @@ describe('validateSettings', () => {
     expect(validateSettings({ unrestrictedConfirmed: true }).unrestrictedConfirmed).toBe(true);
   });
 
+  it('tracks hub and task unrestricted confirmations independently', () => {
+    expect(validateSettings({ hubUnrestrictedConfirmed: 'yes' }).hubUnrestrictedConfirmed).toBe(false);
+    expect(validateSettings({ hubUnrestrictedConfirmed: true }).hubUnrestrictedConfirmed).toBe(true);
+
+    // Confirming one path must not authorise the other; a hub session is
+    // interactive and its approval covers far more than a single task.
+    const taskOnly = validateSettings({ unrestrictedConfirmed: true });
+    expect(taskOnly.unrestrictedConfirmed).toBe(true);
+    expect(taskOnly.hubUnrestrictedConfirmed).toBe(false);
+
+    const hubOnly = validateSettings({ hubUnrestrictedConfirmed: true });
+    expect(hubOnly.unrestrictedConfirmed).toBe(false);
+    expect(hubOnly.hubUnrestrictedConfirmed).toBe(true);
+  });
+
   it('preserves valid custom fields while falling back on invalid fields', () => {
     const raw = {
       model: 'gemini-3.1-pro-high',
-      effort: 'INVALID',
       hubPort: 'not-a-number',
       cliPath: '  /usr/local/bin/agy  ',
       customRulesPath: 'rules/AGENTS.md',
@@ -69,7 +81,6 @@ describe('validateSettings', () => {
 
     const validated = validateSettings(raw);
     expect(validated.model).toBe('gemini-3.1-pro-high');
-    expect(validated.effort).toBe('none');
     expect(validated.hubPort).toBe(0);
     expect(validated.cliPath).toBe('/usr/local/bin/agy');
     expect(validated.customRulesPath).toBe('rules/AGENTS.md');

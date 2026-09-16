@@ -1,4 +1,4 @@
-import { App, Component, MarkdownRenderer, MarkdownView, Modal, Notice, Setting, normalizePath } from 'obsidian';
+import { App, Component, MarkdownRenderer, MarkdownView, Modal, Notice, Setting, normalizePath, setIcon } from 'obsidian';
 import { t } from '../i18n';
 
 export class ResultModal extends Modal {
@@ -23,7 +23,8 @@ export class ResultModal extends Modal {
 
     if (this.isUnrestricted) {
       const banner = contentEl.createDiv({ cls: 'antigravity-risk-banner' });
-      banner.setText(t('resultModal.riskBanner'));
+      setIcon(banner.createSpan({ cls: 'antigravity-risk-banner-icon' }), 'alert-triangle');
+      banner.createSpan({ text: t('resultModal.riskBanner') });
     }
 
     const scrollContainer = contentEl.createDiv({
