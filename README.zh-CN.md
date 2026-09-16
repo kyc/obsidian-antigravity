@@ -6,6 +6,8 @@
 
 [English](README.md) | 简体中文
 
+![在 Obsidian 标签页中运行的 Assistant Web Hub](docs/images/hub-view-dark.png)
+
 ---
 
 ## 前置要求
@@ -99,6 +101,8 @@ npm run build
 ### 库任务与安全
 
 - **允许无限制执行任务** —— 传递 `--dangerously-skip-permissions` 以自动批准工具调用。首次使用需显式确认。禁用时，无头模式下的危险操作会被拦截，并以 `denied_actions` 形式回报。
+
+![插件设置：Hub、库规范规则与任务安全分组](docs/images/settings-dark.png)
 
 ---
 

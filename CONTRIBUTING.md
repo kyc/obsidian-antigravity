@@ -33,6 +33,15 @@ Thank you for your interest in contributing to Obsidian Antigravity! We welcome 
 - **Unit Tests**: Add Jest unit tests under `tests/unit/` mirroring `src/` files whenever introducing new logic or fixing bugs.
 - **No Fluff & Zero Overhead**: The plugin maintains zero runtime external dependencies beyond `cross-spawn`.
 
+## Screenshots
+
+The READMEs embed screenshots from `docs/images/`, so both `README.md` and
+`README.zh-CN.md` must reference the same file names.
+
+If you change a view's layout or styling, refresh the affected screenshot. See
+[docs/images/README.md](docs/images/README.md) for the naming scheme, capture
+checklist, and content rules on avoiding real vault content and private paths.
+
 ## Pull Request Guidelines
 
 1. Create a feature branch from `main`:

@@ -6,6 +6,8 @@ Rather than wrapping Antigravity in a chat interface, this plugin exposes it as 
 
 English | [简体中文](README.zh-CN.md)
 
+![The assistant web hub running inside an Obsidian tab](docs/images/hub-view-dark.png)
+
 ---
 
 ## Requirements
@@ -99,6 +101,8 @@ Found under **Settings → Antigravity**.
 ### Vault tasks & security
 
 - **Allow unrestricted tasks** — Passes `--dangerously-skip-permissions` to auto-approve tool execution. Requires an explicit confirmation on first use. While disabled, dangerous operations are blocked in headless mode and reported as `denied_actions`.
+
+![Plugin settings grouped into hub, vault rules, and task security](docs/images/settings-dark.png)
 
 ---
 
