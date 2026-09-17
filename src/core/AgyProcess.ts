@@ -1,4 +1,5 @@
-import { ChildProcess, spawn, SpawnOptions } from 'child_process';
+import { ChildProcess, execFileSync, spawn, SpawnOptions } from 'child_process';
+import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 
@@ -58,6 +59,136 @@ export class AgyProcess {
   }
 
   /**
+   * Checks whether a process with the given PID is currently alive and accessible.
+   */
+  static isPidAlive(pid: number): boolean {
+    if (!pid || pid <= 0) return false;
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch (err: unknown) {
+      return (err as NodeJS.ErrnoException).code === 'EPERM';
+    }
+  }
+
+  /**
+   * Delivers a termination signal to a process, optionally targeting its process group.
+   */
+  static killPid(pid: number, killProcessGroup = false, signal: NodeJS.Signals = 'SIGTERM'): boolean {
+    if (!pid || pid <= 0) return false;
+    const useGroup = Boolean(killProcessGroup && process.platform !== 'win32');
+    if (useGroup) {
+      try {
+        process.kill(-pid, signal);
+        return true;
+      } catch {
+        // Fall back to direct process signal
+      }
+    }
+    try {
+      process.kill(pid, signal);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Terminate a PID gracefully with SIGTERM, escalating to SIGKILL if still alive after timeout.
+   */
+  static async terminatePid(pid: number, killProcessGroup = false, timeoutMs = 1500): Promise<boolean> {
+    if (!this.isPidAlive(pid)) return true;
+    this.killPid(pid, killProcessGroup, 'SIGTERM');
+
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      if (!this.isPidAlive(pid)) return true;
+      await new Promise((r) => window.setTimeout(r, 50));
+    }
+
+    if (this.isPidAlive(pid)) {
+      this.killPid(pid, killProcessGroup, 'SIGKILL');
+    }
+    return !this.isPidAlive(pid);
+  }
+
+  /**
+   * Finds running agy --hub daemon process PIDs targeting a specific profile directory.
+   */
+  static findAgyHubProcesses(safeProfile: string): number[] {
+    const pids: number[] = [];
+    const currentPid = process.pid;
+
+    if (process.platform === 'linux' && fs.existsSync('/proc')) {
+      try {
+        const entries = fs.readdirSync('/proc');
+        for (const entry of entries) {
+          if (!/^\d+$/.test(entry)) continue;
+          const pid = parseInt(entry, 10);
+          if (pid === currentPid) continue;
+
+          try {
+            const cmdline = fs.readFileSync(`/proc/${entry}/cmdline`, 'utf8');
+            const args = cmdline.split('\0').filter(Boolean);
+            if (args.length === 0) continue;
+
+            const exe = args[0];
+            const isAgy = exe === 'agy' || exe.endsWith('/agy') || exe.endsWith('\\agy.exe');
+            if (!isAgy) continue;
+
+            const hasHub = args.includes('--hub');
+            const hasProfile = args.some(
+              (arg) => arg === `--app_data_dir=${safeProfile}` || arg.startsWith(`--app_data_dir=${safeProfile}`),
+            );
+
+            if (hasHub && hasProfile) {
+              pids.push(pid);
+            }
+          } catch {
+            // Process may have exited between readdir and readFileSync
+          }
+        }
+        return pids;
+      } catch {
+        // Fall back to ps inspection
+      }
+    }
+
+    if (process.platform === 'darwin' || process.platform === 'linux') {
+      try {
+        const output = execFileSync('ps', ['-A', '-o', 'pid,args'], {
+          encoding: 'utf8',
+          stdio: ['ignore', 'pipe', 'ignore'],
+        });
+        const lines = output.split('\n');
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed) continue;
+          const match = trimmed.match(/^(\d+)\s+(.+)$/);
+          if (!match) continue;
+          const pid = parseInt(match[1], 10);
+          if (pid === currentPid) continue;
+          const cmd = match[2];
+          if (
+            !cmd.includes('node ') &&
+            (cmd.includes('/agy ') || cmd.startsWith('agy ')) &&
+            cmd.includes('--hub') &&
+            cmd.includes(`--app_data_dir=${safeProfile}`)
+          ) {
+            if (!pids.includes(pid)) {
+              pids.push(pid);
+            }
+          }
+        }
+      } catch {
+        // Fallback execution failed, return discovered pids so far
+      }
+    }
+
+    return pids;
+  }
+
+  /**
    * Sends SIGTERM, escalating to SIGKILL after a grace period when the process
    * has not exited. When killProcessGroup is true on non-Windows platforms, signals
    * are sent to the negative PID (-pid) to terminate the entire process group.
@@ -75,7 +206,6 @@ export class AgyProcess {
       if (useGroup && pid) {
         try {
           process.kill(-pid, signal);
-          return;
         } catch {
           // Process group may already have exited or failed, fallback to direct child.kill
         }

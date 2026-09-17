@@ -10,6 +10,10 @@ import {
   ensureProfileOnboarding,
   ensureProfileSettings,
   ensureVaultProject,
+  getHubInstanceFilePath,
+  loadHubInstanceMetadata,
+  removeHubInstanceMetadata,
+  saveHubInstanceMetadata,
 } from '../../../src/core/AgyHubManager';
 
 describe('AgyHubManager', () => {
@@ -574,5 +578,98 @@ describe('AgyHubManager', () => {
       expect(parsed.permissions).toEqual({ allow: ['command(git *)', 'command(python *)'] });
     });
   });
+
+  describe('Hub instance metadata persistence', () => {
+    let tmpDir: string;
+
+    beforeEach(() => {
+      tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agy-meta-test-'));
+    });
+
+    afterEach(() => {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    it('saves, loads, and removes hub-instance.json correctly', () => {
+      const meta = {
+        pid: 12345,
+        port: 42500,
+        profile: 'test-profile',
+        vaultPath: '/test/vault',
+        dangerouslySkipPermissions: true,
+        startedAt: Date.now(),
+      };
+
+      saveHubInstanceMetadata('test-profile', meta, tmpDir);
+      const loaded = loadHubInstanceMetadata('test-profile', tmpDir);
+      expect(loaded).toEqual(meta);
+
+      removeHubInstanceMetadata('test-profile', tmpDir);
+      const afterRemoval = loadHubInstanceMetadata('test-profile', tmpDir);
+      expect(afterRemoval).toBeNull();
+    });
+
+    it('returns null if hub-instance.json contains invalid format', () => {
+      const filePath = getHubInstanceFilePath('test-profile', tmpDir);
+      fs.mkdirSync(path.dirname(filePath), { recursive: true });
+      fs.writeFileSync(filePath, 'not json');
+
+      expect(loadHubInstanceMetadata('test-profile', tmpDir)).toBeNull();
+    });
+  });
+
+  describe('cleanupStaleHubs', () => {
+    let tmpDir: string;
+
+    beforeEach(() => {
+      tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agy-cleanup-test-'));
+    });
+
+    afterEach(() => {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    it('terminates stale tracked PID and orphan discovered PIDs', async () => {
+      const { AgyProcess } = require('../../../src/core/AgyProcess');
+      const terminateSpy = jest.spyOn(AgyProcess, 'terminatePid').mockResolvedValue(true);
+      const findSpy = jest.spyOn(AgyProcess, 'findAgyHubProcesses').mockReturnValue([8888, 9999]);
+
+      const meta = {
+        pid: 7777,
+        port: 40000,
+        profile: 'test-profile',
+        vaultPath: '/test/vault',
+        dangerouslySkipPermissions: false,
+        startedAt: Date.now(),
+      };
+      saveHubInstanceMetadata('test-profile', meta, tmpDir);
+
+      await hubManager.cleanupStaleHubs('test-profile', tmpDir);
+
+      expect(terminateSpy).toHaveBeenCalledWith(7777, true);
+      expect(terminateSpy).toHaveBeenCalledWith(8888, true);
+      expect(terminateSpy).toHaveBeenCalledWith(9999, true);
+      expect(loadHubInstanceMetadata('test-profile', tmpDir)).toBeNull();
+
+      terminateSpy.mockRestore();
+      findSpy.mockRestore();
+    });
+
+    it('does not terminate the currently managed child PID', async () => {
+      const { AgyProcess } = require('../../../src/core/AgyProcess');
+      const terminateSpy = jest.spyOn(AgyProcess, 'terminatePid').mockResolvedValue(true);
+      const findSpy = jest.spyOn(AgyProcess, 'findAgyHubProcesses').mockReturnValue([1234]);
+
+      (hubManager as any).hubProcess = { pid: 1234 };
+
+      await hubManager.cleanupStaleHubs('test-profile', tmpDir);
+
+      expect(terminateSpy).not.toHaveBeenCalled();
+
+      terminateSpy.mockRestore();
+      findSpy.mockRestore();
+    });
+  });
 });
+
 

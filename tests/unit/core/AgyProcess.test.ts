@@ -93,3 +93,90 @@ describe('AgyProcess.killProcess', () => {
     }
   });
 });
+
+describe('AgyProcess PID utilities', () => {
+  describe('isPidAlive', () => {
+    it('returns false for non-positive or falsy pid', () => {
+      expect(AgyProcess.isPidAlive(0)).toBe(false);
+      expect(AgyProcess.isPidAlive(-1)).toBe(false);
+    });
+
+    it('returns true when process.kill(pid, 0) succeeds', () => {
+      const killSpy = jest.spyOn(process, 'kill').mockImplementation(() => true);
+      expect(AgyProcess.isPidAlive(9999)).toBe(true);
+      expect(killSpy).toHaveBeenCalledWith(9999, 0);
+      killSpy.mockRestore();
+    });
+
+    it('returns true when process.kill(pid, 0) throws EPERM', () => {
+      const err = new Error('EPERM') as NodeJS.ErrnoException;
+      err.code = 'EPERM';
+      const killSpy = jest.spyOn(process, 'kill').mockImplementation(() => {
+        throw err;
+      });
+      expect(AgyProcess.isPidAlive(9999)).toBe(true);
+      killSpy.mockRestore();
+    });
+
+    it('returns false when process.kill(pid, 0) throws ESRCH', () => {
+      const err = new Error('ESRCH') as NodeJS.ErrnoException;
+      err.code = 'ESRCH';
+      const killSpy = jest.spyOn(process, 'kill').mockImplementation(() => {
+        throw err;
+      });
+      expect(AgyProcess.isPidAlive(9999)).toBe(false);
+      killSpy.mockRestore();
+    });
+  });
+
+  describe('killPid', () => {
+    it('returns false for invalid pid', () => {
+      expect(AgyProcess.killPid(0)).toBe(false);
+    });
+
+    it('sends direct signal when killProcessGroup is false', () => {
+      const killSpy = jest.spyOn(process, 'kill').mockImplementation(() => true);
+      expect(AgyProcess.killPid(1234, false, 'SIGTERM')).toBe(true);
+      expect(killSpy).toHaveBeenCalledWith(1234, 'SIGTERM');
+      killSpy.mockRestore();
+    });
+
+    it('sends group signal when killProcessGroup is true on non-Windows', () => {
+      const origPlatform = process.platform;
+      try {
+        Object.defineProperty(process, 'platform', { value: 'linux' });
+        const killSpy = jest.spyOn(process, 'kill').mockImplementation(() => true);
+        expect(AgyProcess.killPid(1234, true, 'SIGKILL')).toBe(true);
+        expect(killSpy).toHaveBeenCalledWith(-1234, 'SIGKILL');
+        killSpy.mockRestore();
+      } finally {
+        Object.defineProperty(process, 'platform', { value: origPlatform });
+      }
+    });
+  });
+
+  describe('terminatePid', () => {
+    it('returns true immediately if pid is not alive', async () => {
+      jest.spyOn(AgyProcess, 'isPidAlive').mockReturnValue(false);
+      const result = await AgyProcess.terminatePid(1234);
+      expect(result).toBe(true);
+      (AgyProcess.isPidAlive as jest.Mock).mockRestore();
+    });
+
+    it('sends SIGTERM and waits until process exits', async () => {
+      let calls = 0;
+      jest.spyOn(AgyProcess, 'isPidAlive').mockImplementation(() => {
+        calls++;
+        return calls <= 2;
+      });
+      const killSpy = jest.spyOn(AgyProcess, 'killPid').mockReturnValue(true);
+
+      const result = await AgyProcess.terminatePid(1234, false, 500);
+      expect(result).toBe(true);
+      expect(killSpy).toHaveBeenCalledWith(1234, false, 'SIGTERM');
+      (AgyProcess.isPidAlive as jest.Mock).mockRestore();
+      killSpy.mockRestore();
+    });
+  });
+});
+

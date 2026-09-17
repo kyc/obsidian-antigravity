@@ -167,6 +167,27 @@ export default class AntigravityPlugin extends Plugin {
     // Settings Tab
     this.addSettingTab(new AntigravitySettingTab(this.app, this, this.resolver));
 
+    // Clean up any stale hub instances from previous crashes or ungraceful exits
+    void this.hubManager.cleanupStaleHubs(this.settings.hubProfile || 'antigravity-obsidian');
+
+    // Register window lifecycle events for graceful shutdown on close or reload
+    this.registerDomEvent(window, 'beforeunload', () => {
+      this.cleanupProcesses();
+    });
+    this.registerDomEvent(window, 'pagehide', () => {
+      this.cleanupProcesses();
+    });
+
+    if (typeof process !== 'undefined' && typeof process.on === 'function') {
+      const onProcessExit = () => {
+        this.cleanupProcesses();
+      };
+      process.on('exit', onProcessExit);
+      this.register(() => {
+        process.off('exit', onProcessExit);
+      });
+    }
+
     // Auto-start Hub if enabled
     if (this.settings.autoStartHub) {
       const exec = this.resolver.resolve(this.settings.cliPath);
@@ -195,12 +216,16 @@ export default class AntigravityPlugin extends Plugin {
     }
   }
 
-  onunload(): void {
+  cleanupProcesses(): void {
     this.hubManager.stopHub();
     if (this.taskRunner) {
       this.taskRunner.abort();
       this.taskRunner.dispose();
     }
+  }
+
+  onunload(): void {
+    this.cleanupProcesses();
   }
 
   async loadSettings(): Promise<void> {

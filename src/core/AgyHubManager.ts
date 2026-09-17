@@ -299,6 +299,71 @@ export function ensureProfileInitialized(
   return auth;
 }
 
+export interface HubInstanceMetadata {
+  pid: number;
+  port: number;
+  profile: string;
+  vaultPath: string;
+  dangerouslySkipPermissions: boolean;
+  startedAt: number;
+}
+
+export function getHubInstanceFilePath(profile: string, homeDir: string = os.homedir()): string {
+  const safeProfile = sanitizeProfile(profile);
+  return path.join(homeDir, '.gemini', safeProfile, 'hub-instance.json');
+}
+
+export function loadHubInstanceMetadata(profile: string, homeDir: string = os.homedir()): HubInstanceMetadata | null {
+  const filePath = getHubInstanceFilePath(profile, homeDir);
+  try {
+    if (fs.existsSync(filePath)) {
+      const raw: unknown = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+      if (
+        raw &&
+        typeof raw === 'object' &&
+        typeof (raw as Record<string, unknown>).pid === 'number' &&
+        typeof (raw as Record<string, unknown>).port === 'number'
+      ) {
+        return raw as HubInstanceMetadata;
+      }
+    }
+  } catch {
+    // Non-critical
+  }
+  return null;
+}
+
+export function saveHubInstanceMetadata(
+  profile: string,
+  metadata: HubInstanceMetadata,
+  homeDir: string = os.homedir(),
+): void {
+  const filePath = getHubInstanceFilePath(profile, homeDir);
+  const targetDir = path.dirname(filePath);
+  try {
+    if (!fs.existsSync(targetDir)) {
+      fs.mkdirSync(targetDir, { recursive: true, mode: 0o700 });
+    }
+    fs.writeFileSync(filePath, JSON.stringify(metadata, null, 2), {
+      encoding: 'utf8',
+      mode: 0o600,
+    });
+  } catch {
+    // Non-critical
+  }
+}
+
+export function removeHubInstanceMetadata(profile: string, homeDir: string = os.homedir()): void {
+  const filePath = getHubInstanceFilePath(profile, homeDir);
+  try {
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+    }
+  } catch {
+    // Non-critical
+  }
+}
+
 interface InFlightHubStart {
   profile: string;
   vaultPath: string;
@@ -387,6 +452,9 @@ export class AgyHubManager {
         this.stopHub();
       }
 
+      // Terminate any stale/orphan hub processes for this profile from previous sessions or crashes
+      await this.cleanupStaleHubs(safeProfile);
+
       const port = preferredPort > 0 ? preferredPort : await this.getFreePort();
       const projectId = ensureVaultProject(vaultPath);
       ensureDefaultProjectId(safeProfile, projectId);
@@ -421,6 +489,17 @@ export class AgyHubManager {
         detached: process.platform !== 'win32',
       });
 
+      if (child.pid) {
+        saveHubInstanceMetadata(safeProfile, {
+          pid: child.pid,
+          port,
+          profile: safeProfile,
+          vaultPath,
+          dangerouslySkipPermissions,
+          startedAt: Date.now(),
+        });
+      }
+
       // The hub is a long-lived daemon that logs continuously. A 'pipe' stream
       // is not drained automatically, so once the child writes past the OS
       // pipe buffer (~64KB) it blocks inside write() and the hub stops
@@ -436,6 +515,9 @@ export class AgyHubManager {
 
       child.on('exit', () => {
         if (this.hubProcess === child) {
+          if (this.currentProfile) {
+            removeHubInstanceMetadata(this.currentProfile);
+          }
           this.hubProcess = null;
           this.port = null;
           this.currentProfile = null;
@@ -450,6 +532,7 @@ export class AgyHubManager {
         await this.waitForPort({ port, child, timeoutMs: 15000 });
       } catch (err) {
         const detail = this.getRecentOutput();
+        removeHubInstanceMetadata(safeProfile);
         AgyProcess.killProcess(child, true);
         this.recentOutput = [];
 
@@ -531,8 +614,34 @@ export class AgyHubManager {
     return this.currentDangerouslySkipPermissions;
   }
 
+  /**
+   * Discovers and cleans up stale/orphaned hub processes for this profile from previous sessions.
+   */
+  async cleanupStaleHubs(profile: string, homeDir: string = os.homedir()): Promise<void> {
+    const safeProfile = sanitizeProfile(profile);
+    const currentChildPid = this.hubProcess?.pid;
+
+    // 1. Check tracked instance file
+    const meta = loadHubInstanceMetadata(safeProfile, homeDir);
+    if (meta && meta.pid && meta.pid !== currentChildPid) {
+      await AgyProcess.terminatePid(meta.pid, true);
+      removeHubInstanceMetadata(safeProfile, homeDir);
+    }
+
+    // 2. Scan for any orphaned agy --hub processes matching this profile
+    const orphanPids = AgyProcess.findAgyHubProcesses(safeProfile);
+    for (const pid of orphanPids) {
+      if (pid !== currentChildPid) {
+        await AgyProcess.terminatePid(pid, true);
+      }
+    }
+  }
+
   stopHub(): void {
     this.clearKillEscalation();
+    if (this.currentProfile) {
+      removeHubInstanceMetadata(this.currentProfile);
+    }
     if (this.hubProcess) {
       this.killEscalation = AgyProcess.killProcess(this.hubProcess, true);
       this.hubProcess = null;
