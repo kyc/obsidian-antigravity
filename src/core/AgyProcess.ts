@@ -59,26 +59,43 @@ export class AgyProcess {
 
   /**
    * Sends SIGTERM, escalating to SIGKILL after a grace period when the process
-   * has not exited. The returned handle cancels the escalation timer, so callers
-   * (and tests) can release it instead of leaving a dangling timer behind.
+   * has not exited. When killProcessGroup is true on non-Windows platforms, signals
+   * are sent to the negative PID (-pid) to terminate the entire process group.
+   * The returned handle cancels the escalation timer, so callers (and tests)
+   * can release it instead of leaving a dangling timer behind.
    */
-  static killProcess(child: ChildProcess | null): KillEscalation {
+  static killProcess(child: ChildProcess | null, killProcessGroup = false): KillEscalation {
     const noop: KillEscalation = { cancel: () => {} };
     if (!child || child.killed) return noop;
 
+    const pid = child.pid;
+    const useGroup = Boolean(killProcessGroup && pid && process.platform !== 'win32');
+
+    const sendSignal = (signal: NodeJS.Signals) => {
+      if (useGroup && pid) {
+        try {
+          process.kill(-pid, signal);
+          return;
+        } catch {
+          // Process group may already have exited or failed, fallback to direct child.kill
+        }
+      }
+      try {
+        child.kill(signal);
+      } catch {
+        // Ignore
+      }
+    };
+
     try {
-      child.kill('SIGTERM');
+      sendSignal('SIGTERM');
     } catch {
       return noop;
     }
 
     const timer = window.setTimeout(() => {
       if (!child.killed) {
-        try {
-          child.kill('SIGKILL');
-        } catch {
-          // Ignore
-        }
+        sendSignal('SIGKILL');
       }
     }, 2000);
 

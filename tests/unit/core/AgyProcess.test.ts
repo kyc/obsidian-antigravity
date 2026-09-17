@@ -57,3 +57,39 @@ describe('AgyProcess.spawnProcess stdio defaults', () => {
     spawnSpy.mockRestore();
   });
 });
+
+describe('AgyProcess.killProcess', () => {
+  it('returns noop when child is null or already killed', () => {
+    const handle = AgyProcess.killProcess(null);
+    expect(typeof handle.cancel).toBe('function');
+    handle.cancel();
+
+    const killedChild = { killed: true, kill: jest.fn() } as any;
+    const handle2 = AgyProcess.killProcess(killedChild);
+    expect(killedChild.kill).not.toHaveBeenCalled();
+    handle2.cancel();
+  });
+
+  it('sends SIGTERM to child by default', () => {
+    const child = { killed: false, pid: 1234, kill: jest.fn() } as any;
+    const handle = AgyProcess.killProcess(child);
+    expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+    handle.cancel();
+  });
+
+  it('sends signals to process group when killProcessGroup is true on non-Windows', () => {
+    const origPlatform = process.platform;
+    try {
+      Object.defineProperty(process, 'platform', { value: 'linux' });
+      const killSpy = jest.spyOn(process, 'kill').mockImplementation(() => true);
+      const child = { killed: false, pid: 5678, kill: jest.fn() } as any;
+
+      const handle = AgyProcess.killProcess(child, true);
+      expect(killSpy).toHaveBeenCalledWith(-5678, 'SIGTERM');
+      handle.cancel();
+      killSpy.mockRestore();
+    } finally {
+      Object.defineProperty(process, 'platform', { value: origPlatform });
+    }
+  });
+});

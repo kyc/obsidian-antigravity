@@ -552,6 +552,27 @@ describe('AgyHubManager', () => {
       expect(parsed.permissionMode).toBe('request-review');
       expect(parsed.allowNonWorkspaceAccess).toBe(false);
     });
+
+    it('backfills permissions from candidate sources into an existing profile without permissions', () => {
+      const cliDir = path.join(tmpDir, '.gemini', 'antigravity-cli');
+      fs.mkdirSync(cliDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(cliDir, 'settings.json'),
+        JSON.stringify({ permissions: { allow: ['command(git *)', 'command(python *)'] } }),
+      );
+
+      const targetDir = path.join(tmpDir, '.gemini', 'test-obsidian');
+      fs.mkdirSync(targetDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(targetDir, 'settings.json'),
+        JSON.stringify({ permissionMode: 'always-proceed' }),
+      );
+
+      ensureProfileSettings('test-obsidian', undefined, tmpDir);
+
+      const parsed = JSON.parse(fs.readFileSync(path.join(targetDir, 'settings.json'), 'utf8'));
+      expect(parsed.permissions).toEqual({ allow: ['command(git *)', 'command(python *)'] });
+    });
   });
 });
 

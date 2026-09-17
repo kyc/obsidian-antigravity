@@ -207,6 +207,12 @@ export function ensureProfileSettings(
       fs.mkdirSync(targetDir, { recursive: true, mode: 0o700 });
     }
 
+    const candidateSources = [
+      path.join(homeDir, '.gemini', 'antigravity-cli', 'settings.json'),
+      path.join(homeDir, '.gemini', 'antigravity', 'settings.json'),
+      path.join(homeDir, '.gemini', 'antigravity-ide', 'settings.json'),
+    ];
+
     let settings: Record<string, unknown> = {};
     if (fs.existsSync(targetSettingsFile)) {
       try {
@@ -218,17 +224,33 @@ export function ensureProfileSettings(
         settings = {};
       }
     } else {
-      const candidateSources = [
-        path.join(homeDir, '.gemini', 'antigravity-cli', 'settings.json'),
-        path.join(homeDir, '.gemini', 'antigravity', 'settings.json'),
-        path.join(homeDir, '.gemini', 'antigravity-ide', 'settings.json'),
-      ];
       for (const src of candidateSources) {
         if (fs.existsSync(src)) {
           try {
             const raw: unknown = JSON.parse(fs.readFileSync(src, 'utf8'));
             if (typeof raw === 'object' && raw !== null) {
               settings = raw as Record<string, unknown>;
+              break;
+            }
+          } catch {
+            // Non-critical, try next candidate
+          }
+        }
+      }
+    }
+
+    if (!settings.permissions) {
+      for (const src of candidateSources) {
+        if (fs.existsSync(src)) {
+          try {
+            const raw: unknown = JSON.parse(fs.readFileSync(src, 'utf8'));
+            if (
+              typeof raw === 'object' &&
+              raw !== null &&
+              'permissions' in raw &&
+              typeof (raw as Record<string, unknown>).permissions === 'object'
+            ) {
+              settings.permissions = (raw as Record<string, unknown>).permissions;
               break;
             }
           } catch {
@@ -396,6 +418,7 @@ export class AgyHubManager {
         cwd: vaultPath,
         env: enrichedEnv,
         stdio: ['ignore', 'pipe', 'pipe'],
+        detached: process.platform !== 'win32',
       });
 
       // The hub is a long-lived daemon that logs continuously. A 'pipe' stream
@@ -427,7 +450,7 @@ export class AgyHubManager {
         await this.waitForPort({ port, child, timeoutMs: 15000 });
       } catch (err) {
         const detail = this.getRecentOutput();
-        AgyProcess.killProcess(child);
+        AgyProcess.killProcess(child, true);
         this.recentOutput = [];
 
         const message = (err as Error).message;
@@ -511,7 +534,7 @@ export class AgyHubManager {
   stopHub(): void {
     this.clearKillEscalation();
     if (this.hubProcess) {
-      this.killEscalation = AgyProcess.killProcess(this.hubProcess);
+      this.killEscalation = AgyProcess.killProcess(this.hubProcess, true);
       this.hubProcess = null;
       this.port = null;
       this.currentProfile = null;
