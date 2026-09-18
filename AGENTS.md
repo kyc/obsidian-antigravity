@@ -32,7 +32,8 @@ Unit tests mirror `src/` under `tests/unit/`.
 | `src/i18n/` | Internationalization subsystem (`getLanguage()` detection, type-safe catalogs for `en`, `zh-cn`, `zh-tw`). |
 | `src/core/AgyProcess.ts` | Process execution wrapper for `agy` CLI using native `child_process`. |
 | `src/core/AgyResolver.ts` | Resolution and verification of `agy` binary across system and local paths. |
-| `src/core/AgyHubManager.ts` | Hub daemon manager (`agy --hub`), free port allocation, profile isolation, concurrency serialization, OAuth token sync, onboarding pre-seeding, and project registration. |
+| `src/core/AgyProfile.ts` | Isolated profile bootstrapping, OAuth token sync, onboarding pre-seeding, vault project registration, and safe workspace settings. |
+| `src/core/AgyHubManager.ts` | Hub daemon supervisor (`agy --hub`), free port allocation, concurrency serialization, stale process cleanup, and diagnostics. |
 | `src/core/VaultContext.ts` | Obsidian vault context extractor (active note, selection, folder), path traversal sanitization, and vault rules maintenance. |
 | `src/core/VaultTaskRunner.ts` | Discrete task execution runner (`agy --print`), active run lifecycle isolation, progress streaming, and permission mode control. |
 | `src/ui/HubView.ts` | Embedded Webview tab (`ItemView`) with native leaf actions (`refresh-cw`, `external-link`) embedding the Antigravity Hub SPA. |

@@ -123,7 +123,7 @@ npm run build
 npm run dev          # 监听模式，自动重新构建
 npm run build        # 生产构建输出 main.js 并同步至库
 npm run typecheck    # 检查 TypeScript 类型
-npm test             # 运行 Jest 单元测试（8 个套件，118 个测试）
+npm test             # 运行 Jest 单元测试（9 个套件，118 个测试）
 npm run lint         # 使用 eslint-plugin-obsidianmd 检查源码
 ```
 

@@ -142,7 +142,8 @@ obsidian-antigravity/
 │   ├── core/
 │   │   ├── AgyProcess.ts              # 底层进程孵化封装 (child_process / 环境变量增强)
 │   │   ├── AgyResolver.ts             # agy 可执行文件跨平台探测与版本校验
-│   │   ├── AgyHubManager.ts           # agy --hub 守护进程、Profile 认证、Onboarding 及项目注册管理
+│   │   ├── AgyProfile.ts              # Profile 引导、OAuth 同步、Onboarding 预置与工作区配置
+│   │   ├── AgyHubManager.ts           # agy --hub 守护进程监督、端口分配、并发互斥与旧实例清理
 │   │   ├── VaultContext.ts            # Obsidian 笔记/选区/目录上下文提取、路径净化与规则维护
 │   │   └── VaultTaskRunner.ts         # 单次独立任务运行器 (agy --print, 生命周期与权限控制)
 │   ├── i18n/
@@ -160,8 +161,8 @@ obsidian-antigravity/
 ├── tests/
 │   ├── __mocks__/obsidian.ts          # 完备的 Obsidian API 模拟层
 │   ├── setupWindow.ts                 # jsdom 环境与 Obsidian DOM 辅助方法垫片
-│   └── unit/                          # 完整 Jest 单元测试套件 (8 suites, 118 tests)
-│       ├── core/                      # AgyHubManager, VaultContext, VaultTaskRunner, AgyResolver, AgyProcess
+│   └── unit/                          # 完整 Jest 单元测试套件 (9 suites, 118 tests)
+│       ├── core/                      # AgyProfile, AgyHubManager, VaultContext, VaultTaskRunner, AgyResolver, AgyProcess
 │       ├── ui/                        # StatusBarItem 测试
 │       ├── i18n.test.ts               # 语言解析与插值测试
 │       └── settings.test.ts           # 运行时配置类型与边界测试
