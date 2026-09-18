@@ -212,12 +212,6 @@ export function ensureProfileSettings(
       fs.mkdirSync(targetDir, { recursive: true, mode: 0o700 });
     }
 
-    const candidateSources = [
-      path.join(homeDir, '.gemini', 'antigravity-cli', 'settings.json'),
-      path.join(homeDir, '.gemini', 'antigravity', 'settings.json'),
-      path.join(homeDir, '.gemini', 'antigravity-ide', 'settings.json'),
-    ];
-
     let settings: Record<string, unknown> = {};
     if (fs.existsSync(targetSettingsFile)) {
       try {
@@ -228,42 +222,12 @@ export function ensureProfileSettings(
       } catch {
         settings = {};
       }
-    } else {
-      for (const src of candidateSources) {
-        if (fs.existsSync(src)) {
-          try {
-            const raw: unknown = JSON.parse(fs.readFileSync(src, 'utf8'));
-            if (typeof raw === 'object' && raw !== null) {
-              settings = raw as Record<string, unknown>;
-              break;
-            }
-          } catch {
-            // Non-critical, try next candidate
-          }
-        }
-      }
     }
 
-    if (!settings.permissions) {
-      for (const src of candidateSources) {
-        if (fs.existsSync(src)) {
-          try {
-            const raw: unknown = JSON.parse(fs.readFileSync(src, 'utf8'));
-            if (
-              typeof raw === 'object' &&
-              raw !== null &&
-              'permissions' in raw &&
-              typeof (raw as Record<string, unknown>).permissions === 'object'
-            ) {
-              settings.permissions = (raw as Record<string, unknown>).permissions;
-              break;
-            }
-          } catch {
-            // Non-critical, try next candidate
-          }
-        }
-      }
-    }
+    // Never inherit or retain CLI allowlist permissions in plugin profiles.
+    // An inherited allowlist auto-approves arbitrary commands in restricted mode,
+    // breaching the default permission gating.
+    delete settings.permissions;
 
     if (vaultPath) {
       const normalizedVault = path.resolve(vaultPath);
@@ -273,13 +237,6 @@ export function ensureProfileSettings(
       if (!trusted.includes(normalizedVault)) {
         settings.trustedWorkspaces = [...trusted, normalizedVault];
       }
-    }
-
-    if (!settings.permissionMode) {
-      settings.permissionMode = 'always-proceed';
-    }
-    if (settings.allowNonWorkspaceAccess === undefined) {
-      settings.allowNonWorkspaceAccess = true;
     }
 
     fs.writeFileSync(targetSettingsFile, JSON.stringify(settings, null, 2), {

@@ -160,7 +160,7 @@ obsidian-antigravity/
 ├── tests/
 │   ├── __mocks__/obsidian.ts          # 完备的 Obsidian API 模拟层
 │   ├── setupWindow.ts                 # jsdom 环境与 Obsidian DOM 辅助方法垫片
-│   └── unit/                          # 完整 Jest 单元测试套件 (8 suites, 120 tests)
+│   └── unit/                          # 完整 Jest 单元测试套件 (8 suites, 118 tests)
 │       ├── core/                      # AgyHubManager, VaultContext, VaultTaskRunner, AgyResolver, AgyProcess
 │       ├── ui/                        # StatusBarItem 测试
 │       ├── i18n.test.ts               # 语言解析与插值测试

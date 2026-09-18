@@ -123,7 +123,7 @@ Reasoning intensity is part of the model ID itself. `agy` rejects a `--model` ca
 npm run dev          # Watch mode with automatic rebuild
 npm run build        # Production bundle to main.js and sync to vault
 npm run typecheck    # Verify TypeScript types
-npm test             # Run the Jest unit test suite (8 suites, 120 tests)
+npm test             # Run the Jest unit test suite (8 suites, 118 tests)
 npm run lint         # Lint source files with eslint-plugin-obsidianmd
 ```
 

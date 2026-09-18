@@ -527,32 +527,49 @@ describe('AgyHubManager', () => {
       expect(ensureProfileSettings('antigravity-cli', undefined, tmpDir)).toBe(false);
     });
 
-    it('seeds settings.json from antigravity-cli candidate when missing', () => {
-      const cliDir = path.join(tmpDir, '.gemini', 'antigravity-cli');
-      fs.mkdirSync(cliDir, { recursive: true });
-      fs.writeFileSync(
-        path.join(cliDir, 'settings.json'),
-        JSON.stringify({ permissionMode: 'always-proceed', permissions: { allow: ['command(git)'] } }),
-      );
-
-      const result = ensureProfileSettings('test-obsidian', undefined, tmpDir);
-      expect(result).toBe(true);
-
-      const targetFile = path.join(tmpDir, '.gemini', 'test-obsidian', 'settings.json');
-      expect(fs.existsSync(targetFile)).toBe(true);
-      const parsed = JSON.parse(fs.readFileSync(targetFile, 'utf8'));
-      expect(parsed.permissionMode).toBe('always-proceed');
-      expect(parsed.permissions.allow).toEqual(['command(git)']);
-    });
-
-    it('adds normalized vaultPath to trustedWorkspaces', () => {
+    it('creates settings.json and adds normalized vaultPath to trustedWorkspaces', () => {
       const vaultPath = '/home/user/ObsidianVault';
       const result = ensureProfileSettings('test-obsidian', vaultPath, tmpDir);
       expect(result).toBe(true);
 
       const targetFile = path.join(tmpDir, '.gemini', 'test-obsidian', 'settings.json');
+      expect(fs.existsSync(targetFile)).toBe(true);
       const parsed = JSON.parse(fs.readFileSync(targetFile, 'utf8'));
       expect(parsed.trustedWorkspaces).toContain(path.resolve(vaultPath));
+      expect(parsed.permissions).toBeUndefined();
+    });
+
+    it('does not copy or backfill permissions from CLI candidate sources', () => {
+      const cliDir = path.join(tmpDir, '.gemini', 'antigravity-cli');
+      fs.mkdirSync(cliDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(cliDir, 'settings.json'),
+        JSON.stringify({ permissions: { allow: ['command(git *)', 'command(python3 *)'] } }),
+      );
+
+      ensureProfileSettings('test-obsidian', undefined, tmpDir);
+
+      const targetFile = path.join(tmpDir, '.gemini', 'test-obsidian', 'settings.json');
+      const parsed = JSON.parse(fs.readFileSync(targetFile, 'utf8'));
+      expect(parsed.permissions).toBeUndefined();
+    });
+
+    it('strips existing permissions from profile settings to preserve restricted mode', () => {
+      const targetDir = path.join(tmpDir, '.gemini', 'test-obsidian');
+      fs.mkdirSync(targetDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(targetDir, 'settings.json'),
+        JSON.stringify({
+          permissions: { allow: ['command(node)', 'command(python3)'] },
+          customSetting: true,
+        }),
+      );
+
+      ensureProfileSettings('test-obsidian', undefined, tmpDir);
+
+      const parsed = JSON.parse(fs.readFileSync(path.join(targetDir, 'settings.json'), 'utf8'));
+      expect(parsed.permissions).toBeUndefined();
+      expect(parsed.customSetting).toBe(true);
     });
 
     it('does not duplicate existing trustedWorkspaces', () => {
@@ -570,55 +587,6 @@ describe('AgyHubManager', () => {
       const targetFile = path.join(targetDir, 'settings.json');
       const parsed = JSON.parse(fs.readFileSync(targetFile, 'utf8'));
       expect(parsed.trustedWorkspaces).toEqual([normalized]);
-    });
-
-    // These two keys are privileged defaults: they are what let the hub run
-    // tools without per-call review and reach outside the vault. They were
-    // previously written with no test pinning them, so a careless edit could
-    // silently change the security posture. Asserted explicitly on purpose.
-    it('seeds permissionMode and allowNonWorkspaceAccess on a fresh profile', () => {
-      expect(ensureProfileSettings('test-obsidian', undefined, tmpDir)).toBe(true);
-
-      const targetFile = path.join(tmpDir, '.gemini', 'test-obsidian', 'settings.json');
-      const parsed = JSON.parse(fs.readFileSync(targetFile, 'utf8'));
-      expect(parsed.permissionMode).toBe('always-proceed');
-      expect(parsed.allowNonWorkspaceAccess).toBe(true);
-    });
-
-    it('does not overwrite a user-supplied permissionMode or access flag', () => {
-      const targetDir = path.join(tmpDir, '.gemini', 'test-obsidian');
-      fs.mkdirSync(targetDir, { recursive: true });
-      fs.writeFileSync(
-        path.join(targetDir, 'settings.json'),
-        JSON.stringify({ permissionMode: 'request-review', allowNonWorkspaceAccess: false }),
-      );
-
-      ensureProfileSettings('test-obsidian', undefined, tmpDir);
-
-      const parsed = JSON.parse(fs.readFileSync(path.join(targetDir, 'settings.json'), 'utf8'));
-      expect(parsed.permissionMode).toBe('request-review');
-      expect(parsed.allowNonWorkspaceAccess).toBe(false);
-    });
-
-    it('backfills permissions from candidate sources into an existing profile without permissions', () => {
-      const cliDir = path.join(tmpDir, '.gemini', 'antigravity-cli');
-      fs.mkdirSync(cliDir, { recursive: true });
-      fs.writeFileSync(
-        path.join(cliDir, 'settings.json'),
-        JSON.stringify({ permissions: { allow: ['command(git *)', 'command(python *)'] } }),
-      );
-
-      const targetDir = path.join(tmpDir, '.gemini', 'test-obsidian');
-      fs.mkdirSync(targetDir, { recursive: true });
-      fs.writeFileSync(
-        path.join(targetDir, 'settings.json'),
-        JSON.stringify({ permissionMode: 'always-proceed' }),
-      );
-
-      ensureProfileSettings('test-obsidian', undefined, tmpDir);
-
-      const parsed = JSON.parse(fs.readFileSync(path.join(targetDir, 'settings.json'), 'utf8'));
-      expect(parsed.permissions).toEqual({ allow: ['command(git *)', 'command(python *)'] });
     });
   });
 
