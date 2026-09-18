@@ -37,6 +37,17 @@ export class PluginSettingTab {
     return [];
   }
 
+  getControlValue(key: string): unknown {
+    return this.plugin?.settings?.[key];
+  }
+
+  setControlValue(key: string, value: unknown): void | Promise<void> {
+    if (this.plugin?.settings) {
+      this.plugin.settings[key] = value;
+      return this.plugin.saveData(this.plugin.settings);
+    }
+  }
+
   update() {
     this.settingItems = this.getSettingDefinitions();
   }

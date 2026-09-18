@@ -21,19 +21,9 @@ const baseConfig = {
 };
 
 module.exports = {
+  ...baseConfig,
   maxWorkers,
-  projects: [
-    {
-      ...baseConfig,
-      displayName: 'unit',
-      testMatch: ['<rootDir>/tests/unit/**/*.test.ts'],
-    },
-    {
-      ...baseConfig,
-      displayName: 'integration',
-      testMatch: ['<rootDir>/tests/integration/**/*.test.ts'],
-    },
-  ],
+  testMatch: ['<rootDir>/tests/unit/**/*.test.ts'],
   collectCoverageFrom: [
     'src/**/*.ts',
     '!src/**/*.d.ts',

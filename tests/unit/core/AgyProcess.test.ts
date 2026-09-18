@@ -178,5 +178,58 @@ describe('AgyProcess PID utilities', () => {
       killSpy.mockRestore();
     });
   });
+
+  describe('findAgyHubProcesses', () => {
+    it('matches exact profile and avoids prefix-matching collision in /proc', () => {
+      const origPlatform = process.platform;
+      try {
+        Object.defineProperty(process, 'platform', { value: 'linux' });
+        const mockFsOps = {
+          existsSync: (p: string) => p === '/proc',
+          readdirSync: (p: string) => (p === '/proc' ? ['81923', '81924', '81925', 'not-a-pid'] : []),
+          readFileSync: (p: string) => {
+            if (p === '/proc/81923/cmdline') {
+              return 'agy\0--hub\0--app_data_dir=probe-pfx\0';
+            }
+            if (p === '/proc/81924/cmdline') {
+              return 'agy\0--hub\0--app_data_dir=probe-pfx-2\0';
+            }
+            if (p === '/proc/81925/cmdline') {
+              return 'agy\0--hub\0--app_data_dir=probe-pfx_work\0';
+            }
+            return '';
+          },
+        };
+
+        const pids = AgyProcess.findAgyHubProcesses('probe-pfx', mockFsOps);
+        expect(pids).toEqual([81923]);
+      } finally {
+        Object.defineProperty(process, 'platform', { value: origPlatform });
+      }
+    });
+
+    it('matches exact profile and avoids prefix-matching collision in ps fallback', () => {
+      const origPlatform = process.platform;
+      try {
+        Object.defineProperty(process, 'platform', { value: 'linux' });
+        const mockFsOps = {
+          existsSync: () => false,
+          readdirSync: () => [],
+          readFileSync: () => '',
+        };
+        const mockExecOps = {
+          execFileSync: () =>
+            '81923 /usr/bin/agy --hub --app_data_dir=probe-pfx --hub-port=4000\n' +
+            '81924 /usr/bin/agy --hub --app_data_dir=probe-pfx-2 --hub-port=4001\n' +
+            '81925 /usr/bin/agy --hub --app_data_dir=probe-pfx_work --hub-port=4002\n',
+        };
+
+        const pids = AgyProcess.findAgyHubProcesses('probe-pfx', mockFsOps, mockExecOps);
+        expect(pids).toEqual([81923]);
+      } finally {
+        Object.defineProperty(process, 'platform', { value: origPlatform });
+      }
+    });
+  });
 });
 

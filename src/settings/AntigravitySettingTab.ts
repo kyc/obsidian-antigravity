@@ -13,6 +13,18 @@ export class AntigravitySettingTab extends PluginSettingTab {
     super(app, plugin);
   }
 
+  override getControlValue(key: string): unknown {
+    return (this.plugin.settings as unknown as Record<string, unknown>)[key];
+  }
+
+  override async setControlValue(key: string, value: unknown): Promise<void> {
+    (this.plugin.settings as unknown as Record<string, unknown>)[key] = value;
+    await this.plugin.saveSettings();
+    if (key === 'language' && typeof this.update === 'function') {
+      this.update();
+    }
+  }
+
   override getSettingDefinitions(): SettingDefinitionItem[] {
     return [
       {

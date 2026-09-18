@@ -2,7 +2,7 @@ import { Menu, Notice, Plugin, WorkspaceLeaf } from 'obsidian';
 import { AgyHubManager } from './core/AgyHubManager';
 import { AgyResolver } from './core/AgyResolver';
 import { VaultContext } from './core/VaultContext';
-import { VaultTaskRunner } from './core/VaultTaskRunner';
+import { TaskCancelledError, VaultTaskRunner } from './core/VaultTaskRunner';
 import { AntigravitySettingTab } from './settings/AntigravitySettingTab';
 import { AntigravityPluginSettings, DEFAULT_SETTINGS, TaskContext, validateSettings } from './types';
 import { ANTIGRAVITY_HUB_VIEW_TYPE, HubView } from './ui/HubView';
@@ -219,7 +219,7 @@ export default class AntigravityPlugin extends Plugin {
   cleanupProcesses(): void {
     this.hubManager.stopHub();
     if (this.taskRunner) {
-      this.taskRunner.abort();
+      this.taskRunner.abort(false);
       this.taskRunner.dispose();
     }
   }
@@ -244,6 +244,7 @@ export default class AntigravityPlugin extends Plugin {
     // already on, so this cannot clear a fresh acknowledgement.
     if (!this.settings.allowUnrestrictedTasks) {
       this.settings.unrestrictedConfirmed = false;
+      this.settings.hubUnrestrictedConfirmed = false;
     }
 
     await this.saveData(this.settings);
@@ -299,6 +300,9 @@ export default class AntigravityPlugin extends Plugin {
 
       new ResultModal(this.app, title, output, this.settings.allowUnrestrictedTasks).open();
     } catch (err) {
+      if (err instanceof TaskCancelledError) {
+        return;
+      }
       new Notice(t('notices.taskFailed', { error: (err as Error).message }));
     }
   }

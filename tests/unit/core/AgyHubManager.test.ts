@@ -2,6 +2,7 @@ import { EventEmitter } from 'events';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { Notice } from 'obsidian';
 import {
   AgyHubManager,
   ensureDefaultProjectId,
@@ -219,6 +220,23 @@ describe('AgyHubManager', () => {
       expect(spawnArgs).not.toContain('--dangerously-skip-permissions');
       expect(hubManager.getDangerouslySkipPermissions()).toBe(false);
 
+      spawnSpy.mockRestore();
+    });
+
+    it('shows a notice when profile authentication is missing on startHub', async () => {
+      const childProcess = require('child_process');
+      const spawnSpy = jest.spyOn(childProcess, 'spawn').mockReturnValue({
+        on: jest.fn(),
+        kill: jest.fn(),
+        killed: false,
+        exitCode: null,
+      } as any);
+      jest.spyOn(hubManager as any, 'waitForPort').mockResolvedValue(undefined);
+
+      (Notice as unknown as jest.Mock).mockClear();
+      await hubManager.startHub('/bin/agy', '/test/vault', 42500, 'unauthenticated-profile');
+
+      expect(Notice).toHaveBeenCalledWith(expect.stringContaining('Antigravity'));
       spawnSpy.mockRestore();
     });
 
@@ -446,6 +464,31 @@ describe('AgyHubManager', () => {
         artifactReviewMode: 'ARTIFACT_REVIEW_MODE_TURBO',
         autoExecutionPolicy: 'CASCADE_COMMANDS_AUTO_EXECUTION_AUTO',
         customKey: true,
+      });
+    });
+
+    it('preserves existing top-level fields like permissionGrants', () => {
+      const vaultPath = '/home/user/ObsidianVault';
+      const projectId = ensureVaultProject(vaultPath, tmpDir);
+      const projectFile = path.join(tmpDir, '.gemini', 'config', 'projects', `${projectId}.json`);
+
+      const original = JSON.parse(fs.readFileSync(projectFile, 'utf8'));
+      original.permissionGrants = {
+        permissionGrants: {
+          allow: ['command(python3 *)', 'command(obsidian *)'],
+        },
+        v2Migrated: true,
+      };
+      fs.writeFileSync(projectFile, JSON.stringify(original, null, 2), 'utf8');
+
+      ensureVaultProject(vaultPath, tmpDir);
+
+      const updated = JSON.parse(fs.readFileSync(projectFile, 'utf8'));
+      expect(updated.permissionGrants).toEqual({
+        permissionGrants: {
+          allow: ['command(python3 *)', 'command(obsidian *)'],
+        },
+        v2Migrated: true,
       });
     });
   });

@@ -5,7 +5,9 @@ import * as http from 'http';
 import * as net from 'net';
 import * as os from 'os';
 import * as path from 'path';
+import { Notice } from 'obsidian';
 import { AgyProcess, KillEscalation } from './AgyProcess';
+import { t } from '../i18n';
 
 export function sanitizeProfile(profile: string): string {
   if (!profile || typeof profile !== 'string') {
@@ -124,17 +126,19 @@ export function ensureVaultProject(vaultPath: string, homeDir: string = os.homed
     }
 
     let existingSettings: Record<string, unknown> = {};
+    let existingData: Record<string, unknown> = {};
     if (fs.existsSync(projectFile)) {
       try {
         const raw: unknown = JSON.parse(fs.readFileSync(projectFile, 'utf8'));
-        if (
-          typeof raw === 'object' &&
-          raw !== null &&
-          'settings' in raw &&
-          typeof (raw as Record<string, unknown>).settings === 'object' &&
-          (raw as Record<string, unknown>).settings !== null
-        ) {
-          existingSettings = (raw as { settings: Record<string, unknown> }).settings;
+        if (typeof raw === 'object' && raw !== null) {
+          existingData = raw as Record<string, unknown>;
+          if (
+            'settings' in raw &&
+            typeof (raw as Record<string, unknown>).settings === 'object' &&
+            (raw as Record<string, unknown>).settings !== null
+          ) {
+            existingSettings = (raw as { settings: Record<string, unknown> }).settings;
+          }
         }
       } catch {
         // Fallback to empty settings
@@ -147,6 +151,7 @@ export function ensureVaultProject(vaultPath: string, homeDir: string = os.homed
     };
 
     const projectData = {
+      ...existingData,
       id: projectId,
       name: projectName,
       projectResources: {
@@ -458,7 +463,10 @@ export class AgyHubManager {
       const port = preferredPort > 0 ? preferredPort : await this.getFreePort();
       const projectId = ensureVaultProject(vaultPath);
       ensureDefaultProjectId(safeProfile, projectId);
-      ensureProfileInitialized(safeProfile, vaultPath);
+      const isAuthed = ensureProfileInitialized(safeProfile, vaultPath);
+      if (!isAuthed) {
+        new Notice(t('errors.notAuthenticated'));
+      }
 
       const args = [
         '--hub',
@@ -596,10 +604,6 @@ export class AgyHubManager {
 
   isRunning(): boolean {
     return this.hubProcess !== null && !this.hubProcess.killed && this.port !== null;
-  }
-
-  getPort(): number | null {
-    return this.port;
   }
 
   getCurrentProfile(): string | null {

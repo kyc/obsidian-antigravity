@@ -38,7 +38,6 @@ describe('VaultContext', () => {
       expect(vaultContext.getActiveContext()).toEqual({
         scope: 'active-note',
         filePath: 'Notes/Target.md',
-        fileContent: 'body',
       });
     });
 
@@ -55,7 +54,6 @@ describe('VaultContext', () => {
         scope: 'selection',
         filePath: 'Notes/Target.md',
         selectionText: 'picked text',
-        fileContent: 'full body',
       });
     });
 
@@ -70,7 +68,6 @@ describe('VaultContext', () => {
       expect(vaultContext.getActiveContext()).toEqual({
         scope: 'active-note',
         filePath: 'Notes/Open.md',
-        fileContent: 'x',
       });
     });
 

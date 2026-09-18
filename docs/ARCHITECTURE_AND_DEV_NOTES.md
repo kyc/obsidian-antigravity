@@ -140,7 +140,7 @@ obsidian-antigravity/
 │   ├── main.ts                        # 插件主入口、生命周期控制、命令与视图注册
 │   ├── types.ts                       # 核心类型契约、设置接口及 validateSettings 校验器
 │   ├── core/
-│   │   ├── AgyProcess.ts              # 底层进程孵化封装 (cross-spawn / 环境变量增强)
+│   │   ├── AgyProcess.ts              # 底层进程孵化封装 (child_process / 环境变量增强)
 │   │   ├── AgyResolver.ts             # agy 可执行文件跨平台探测与版本校验
 │   │   ├── AgyHubManager.ts           # agy --hub 守护进程、Profile 认证、Onboarding 及项目注册管理
 │   │   ├── VaultContext.ts            # Obsidian 笔记/选区/目录上下文提取、路径净化与规则维护
@@ -160,7 +160,7 @@ obsidian-antigravity/
 ├── tests/
 │   ├── __mocks__/obsidian.ts          # 完备的 Obsidian API 模拟层
 │   ├── setupWindow.ts                 # jsdom 环境与 Obsidian DOM 辅助方法垫片
-│   └── unit/                          # 完整 Jest 单元测试套件 (8 suites, 60 tests)
+│   └── unit/                          # 完整 Jest 单元测试套件 (8 suites, 120 tests)
 │       ├── core/                      # AgyHubManager, VaultContext, VaultTaskRunner, AgyResolver, AgyProcess
 │       ├── ui/                        # StatusBarItem 测试
 │       ├── i18n.test.ts               # 语言解析与插值测试

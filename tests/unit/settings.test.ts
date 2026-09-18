@@ -1,4 +1,6 @@
 import { DEFAULT_SETTINGS, validateSettings } from '../../src/types';
+import { AntigravitySettingTab } from '../../src/settings/AntigravitySettingTab';
+import { AgyResolver } from '../../src/core/AgyResolver';
 
 describe('validateSettings', () => {
   it('returns default settings when input is null or non-object', () => {
@@ -87,3 +89,70 @@ describe('validateSettings', () => {
     expect(validated.enableVaultRules).toBe(true);
   });
 });
+
+describe('AntigravitySettingTab', () => {
+  let mockPlugin: any;
+  let tab: AntigravitySettingTab;
+
+  beforeEach(() => {
+    mockPlugin = {
+      app: {},
+      settings: {
+        ...DEFAULT_SETTINGS,
+        allowUnrestrictedTasks: true,
+        unrestrictedConfirmed: true,
+        hubUnrestrictedConfirmed: true,
+      },
+      saveData: jest.fn().mockResolvedValue(undefined),
+      saveSettings: jest.fn().mockImplementation(async function () {
+        if (!this.settings.allowUnrestrictedTasks) {
+          this.settings.unrestrictedConfirmed = false;
+          this.settings.hubUnrestrictedConfirmed = false;
+        }
+        await this.saveData(this.settings);
+      }),
+    };
+    const resolver = new AgyResolver({
+      existsSync: () => false,
+      statSync: () => ({ isFile: () => false }),
+      accessSync: () => {},
+    });
+    tab = new AntigravitySettingTab({} as any, mockPlugin, resolver);
+  });
+
+  it('reads setting value via getControlValue', () => {
+    expect(tab.getControlValue('model')).toBe(DEFAULT_SETTINGS.model);
+    expect(tab.getControlValue('allowUnrestrictedTasks')).toBe(true);
+  });
+
+  it('mutates settings and delegates to plugin.saveSettings via setControlValue', async () => {
+    await tab.setControlValue('model', 'claude-sonnet-4-6');
+    expect(mockPlugin.settings.model).toBe('claude-sonnet-4-6');
+    expect(mockPlugin.saveSettings).toHaveBeenCalledTimes(1);
+  });
+
+  it('re-arms consent when allowUnrestrictedTasks is toggled off via setControlValue', async () => {
+    expect(mockPlugin.settings.unrestrictedConfirmed).toBe(true);
+    expect(mockPlugin.settings.hubUnrestrictedConfirmed).toBe(true);
+
+    await tab.setControlValue('allowUnrestrictedTasks', false);
+
+    expect(mockPlugin.settings.allowUnrestrictedTasks).toBe(false);
+    expect(mockPlugin.settings.unrestrictedConfirmed).toBe(false);
+    expect(mockPlugin.settings.hubUnrestrictedConfirmed).toBe(false);
+    expect(mockPlugin.saveSettings).toHaveBeenCalledTimes(1);
+  });
+
+  it('triggers update() when language setting changes', async () => {
+    const updateSpy = jest.spyOn(tab, 'update').mockImplementation(() => {});
+
+    await tab.setControlValue('language', 'zh-cn');
+
+    expect(mockPlugin.settings.language).toBe('zh-cn');
+    expect(mockPlugin.saveSettings).toHaveBeenCalledTimes(1);
+    expect(updateSpy).toHaveBeenCalledTimes(1);
+
+    updateSpy.mockRestore();
+  });
+});
+

@@ -2,7 +2,7 @@ import { EventEmitter } from 'events';
 import { Notice } from 'obsidian';
 import { AgyProcess } from '../../../src/core/AgyProcess';
 import { VaultContext } from '../../../src/core/VaultContext';
-import { VaultTaskRunner } from '../../../src/core/VaultTaskRunner';
+import { TaskCancelledError, VaultTaskRunner } from '../../../src/core/VaultTaskRunner';
 
 describe('VaultTaskRunner', () => {
   let mockApp: any;
@@ -484,8 +484,29 @@ describe('VaultTaskRunner', () => {
 
     fakeChild.emit('exit', null);
 
-    await expect(runPromise).rejects.toThrow('Antigravity task was cancelled.');
+    await expect(runPromise).rejects.toThrow(TaskCancelledError);
     expect(runner.running).toBe(false);
+  });
+
+  it('suppresses cancellation notice when abort(false) is called', async () => {
+    const fakeChild: any = new EventEmitter();
+    fakeChild.stdin = { write: jest.fn(), end: jest.fn() };
+    fakeChild.stdout = new EventEmitter();
+    fakeChild.stderr = new EventEmitter();
+
+    jest.spyOn(AgyProcess, 'spawnProcess').mockReturnValue(fakeChild);
+    jest.spyOn(AgyProcess, 'killProcess').mockImplementation(() => {});
+
+    const runPromise = runner.runTask('/bin/agy', {
+      prompt: 'Task to abort silently',
+      context: { scope: 'vault' },
+    });
+
+    (Notice as unknown as jest.Mock).mockClear();
+    runner.abort(false);
+
+    await expect(runPromise).rejects.toThrow(TaskCancelledError);
+    expect(Notice).not.toHaveBeenCalled();
   });
 
   it('does not let late exit of aborted task 1 corrupt subsequently started task 2', async () => {

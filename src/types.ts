@@ -107,7 +107,6 @@ export interface TaskContext {
   filePath?: string;
   folderPath?: string;
   selectionText?: string;
-  fileContent?: string;
 }
 
 export interface TaskExecutionOptions {

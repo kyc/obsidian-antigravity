@@ -30,7 +30,7 @@ Unit tests mirror `src/` under `tests/unit/`.
 | --- | --- |
 | `src/main.ts` | Plugin entrypoint, lifecycle, command registrations, ribbon menu, view registrations. |
 | `src/i18n/` | Internationalization subsystem (`getLanguage()` detection, type-safe catalogs for `en`, `zh-cn`, `zh-tw`). |
-| `src/core/AgyProcess.ts` | Process execution wrapper for `agy` CLI using `cross-spawn`. |
+| `src/core/AgyProcess.ts` | Process execution wrapper for `agy` CLI using native `child_process`. |
 | `src/core/AgyResolver.ts` | Resolution and verification of `agy` binary across system and local paths. |
 | `src/core/AgyHubManager.ts` | Hub daemon manager (`agy --hub`), free port allocation, profile isolation, concurrency serialization, OAuth token sync, onboarding pre-seeding, and project registration. |
 | `src/core/VaultContext.ts` | Obsidian vault context extractor (active note, selection, folder), path traversal sanitization, and vault rules maintenance. |

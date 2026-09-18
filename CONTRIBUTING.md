@@ -31,7 +31,7 @@ Thank you for your interest in contributing to Obsidian Antigravity! We welcome 
 - **Strict Type Safety**: All TypeScript code must compile without errors under `strict: true`. Avoid `any` types and unnecessary type assertions.
 - **ESLint & Sentence Case**: We enforce `eslint-plugin-obsidianmd` with `recommendedWithLocalesEn`. All English UI strings and locale modules must strictly adhere to sentence case.
 - **Unit Tests**: Add Jest unit tests under `tests/unit/` mirroring `src/` files whenever introducing new logic or fixing bugs.
-- **No Fluff & Zero Overhead**: The plugin maintains zero runtime external dependencies beyond `cross-spawn`.
+- **No Fluff & Zero Overhead**: The plugin maintains zero runtime external dependencies, relying entirely on Node.js built-ins and the Obsidian API.
 
 ## Screenshots
 

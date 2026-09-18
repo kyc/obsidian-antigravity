@@ -72,14 +72,12 @@ export class VaultContext {
         scope: 'selection',
         filePath: file.path,
         selectionText: selection,
-        fileContent: editor.getValue(),
       };
     }
 
     return {
       scope: 'active-note',
       filePath: file.path,
-      fileContent: editor ? editor.getValue() : undefined,
     };
   }
 

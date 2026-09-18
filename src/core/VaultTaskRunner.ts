@@ -10,6 +10,14 @@ export interface TaskProgressEvent {
   message: string;
 }
 
+export class TaskCancelledError extends Error {
+  constructor(message?: string) {
+    super(message ?? t('notices.taskCancelledError'));
+    this.name = 'TaskCancelledError';
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
 interface ActiveTaskRun {
   runId: number;
   child: ChildProcess;
@@ -227,7 +235,7 @@ export class VaultTaskRunner {
               this.currentRun = null;
               this.updateStatus('idle', 'Task cancelled');
             }
-            reject(new Error('Antigravity task was cancelled.'));
+            reject(new TaskCancelledError('Antigravity task was cancelled.'));
             return;
           }
 
@@ -280,7 +288,7 @@ export class VaultTaskRunner {
     });
   }
 
-  abort(): void {
+  abort(showNotice: boolean = true): void {
     const run = this.currentRun;
     if (!run || run.isSettled) return;
 
@@ -290,9 +298,11 @@ export class VaultTaskRunner {
 
     AgyProcess.killProcess(run.child);
     this.updateStatus('idle', t('notices.taskCancelledStatus'));
-    new Notice(t('notices.taskCancelled'));
+    if (showNotice) {
+      new Notice(t('notices.taskCancelled'));
+    }
 
-    run.reject(new Error(t('notices.taskCancelledError')));
+    run.reject(new TaskCancelledError(t('notices.taskCancelledError')));
   }
 
   /** Releases pending timers. Safe to call on plugin unload. */

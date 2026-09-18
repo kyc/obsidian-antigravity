@@ -24,6 +24,16 @@ export interface KillEscalation {
   cancel(): void;
 }
 
+export interface ProcFsOperations {
+  existsSync(p: string): boolean;
+  readdirSync(p: string): string[];
+  readFileSync(p: string, encoding: string): string;
+}
+
+export interface ExecOperations {
+  execFileSync(cmd: string, args: string[], options: Record<string, unknown>): string | Buffer;
+}
+
 export class AgyProcess {
   static getEnrichedEnv(additionalEnv: Record<string, string> = {}): NodeJS.ProcessEnv {
     const env = { ...process.env, ...additionalEnv };
@@ -115,20 +125,29 @@ export class AgyProcess {
   /**
    * Finds running agy --hub daemon process PIDs targeting a specific profile directory.
    */
-  static findAgyHubProcesses(safeProfile: string): number[] {
+  static findAgyHubProcesses(
+    safeProfile: string,
+    fsOps?: ProcFsOperations,
+    execOps?: ExecOperations,
+  ): number[] {
     const pids: number[] = [];
     const currentPid = process.pid;
+    const fsReader = fsOps || fs;
+    const execRunner = execOps || {
+      execFileSync: (cmd: string, args: string[], opts: Record<string, unknown>) =>
+        execFileSync(cmd, args, opts),
+    };
 
-    if (process.platform === 'linux' && fs.existsSync('/proc')) {
+    if (process.platform === 'linux' && fsReader.existsSync('/proc')) {
       try {
-        const entries = fs.readdirSync('/proc');
+        const entries = fsReader.readdirSync('/proc');
         for (const entry of entries) {
           if (!/^\d+$/.test(entry)) continue;
           const pid = parseInt(entry, 10);
           if (pid === currentPid) continue;
 
           try {
-            const cmdline = fs.readFileSync(`/proc/${entry}/cmdline`, 'utf8');
+            const cmdline = fsReader.readFileSync(`/proc/${entry}/cmdline`, 'utf8');
             const args = cmdline.split('\0').filter(Boolean);
             if (args.length === 0) continue;
 
@@ -138,7 +157,7 @@ export class AgyProcess {
 
             const hasHub = args.includes('--hub');
             const hasProfile = args.some(
-              (arg) => arg === `--app_data_dir=${safeProfile}` || arg.startsWith(`--app_data_dir=${safeProfile}`),
+              (arg) => arg === `--app_data_dir=${safeProfile}`,
             );
 
             if (hasHub && hasProfile) {
@@ -156,11 +175,14 @@ export class AgyProcess {
 
     if (process.platform === 'darwin' || process.platform === 'linux') {
       try {
-        const output = execFileSync('ps', ['-A', '-o', 'pid,args'], {
+        const rawOutput = execRunner.execFileSync('ps', ['-A', '-o', 'pid,args'], {
           encoding: 'utf8',
           stdio: ['ignore', 'pipe', 'ignore'],
         });
+        const output = typeof rawOutput === 'string' ? rawOutput : rawOutput.toString('utf8');
         const lines = output.split('\n');
+        const escapedProfile = safeProfile.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&');
+        const profileRegex = new RegExp(`(?:^|\\s)--app_data_dir=${escapedProfile}(?:\\s|$)`);
         for (const line of lines) {
           const trimmed = line.trim();
           if (!trimmed) continue;
@@ -173,7 +195,7 @@ export class AgyProcess {
             !cmd.includes('node ') &&
             (cmd.includes('/agy ') || cmd.startsWith('agy ')) &&
             cmd.includes('--hub') &&
-            cmd.includes(`--app_data_dir=${safeProfile}`)
+            profileRegex.test(cmd)
           ) {
             if (!pids.includes(pid)) {
               pids.push(pid);

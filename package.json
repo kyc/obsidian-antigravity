@@ -22,7 +22,6 @@
   "license": "MIT",
   "repository": "kyc/obsidian-antigravity",
   "devDependencies": {
-    "@types/cross-spawn": "^6.0.6",
     "@types/jest": "^30.0.0",
     "@types/node": "^25.5.2",
     "esbuild": "^0.28.1",
@@ -32,8 +31,5 @@
     "obsidian": "1.13.0",
     "ts-jest": "^29.4.9",
     "typescript": "^6.0.2"
-  },
-  "dependencies": {
-    "cross-spawn": "^7.0.6"
   }
 }
