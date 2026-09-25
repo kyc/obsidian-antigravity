@@ -346,5 +346,13 @@ describe('AgyProfile', () => {
 
       expect(loadHubInstanceMetadata('test-profile', tmpDir)).toBeNull();
     });
+
+    it('returns null if hub-instance.json is not valid JSON', () => {
+      const filePath = getHubInstanceFilePath('test-profile', tmpDir);
+      fs.mkdirSync(path.dirname(filePath), { recursive: true });
+      fs.writeFileSync(filePath, 'not json');
+
+      expect(loadHubInstanceMetadata('test-profile', tmpDir)).toBeNull();
+    });
   });
 });

@@ -104,7 +104,9 @@ export class VaultTaskRunner {
       vaultPath,
     ];
 
-    if (settings.allowUnrestrictedTasks) {
+    // Enforce the confirmation here too, not only in the UI flow, so no caller
+    // can reach unrestricted mode without the user's explicit approval.
+    if (settings.allowUnrestrictedTasks && settings.unrestrictedConfirmed) {
       args.push('--dangerously-skip-permissions');
     }
 
@@ -159,6 +161,41 @@ export class VaultTaskRunner {
         let resultResponse: string | null = null;
         let stderrTail = '';
 
+        const processLine = (line: string): void => {
+          const trimmed = line.trim();
+          if (!trimmed) return;
+
+          try {
+            const event = JSON.parse(trimmed) as StreamEvent;
+            if (event.event === 'result' && event.result) {
+              if (event.result.status === 'ERROR') {
+                terminalError = event.result.error || event.result.message || 'Antigravity execution failed';
+              }
+              if (typeof event.result.response === 'string') {
+                resultResponse = event.result.response;
+              }
+              if (Array.isArray(event.result.denied_actions) && event.result.denied_actions.length > 0) {
+                const deniedList = event.result.denied_actions
+                  .map((d) => d.display_name || d.action)
+                  .filter(Boolean)
+                  .join(', ');
+                const note = `\n\n> [!WARNING] Restricted Execution: Certain tool permissions were denied (${deniedList}). Enable "Allow Unrestricted Tasks" in settings if autonomous tool execution is needed.`;
+                resultResponse = (resultResponse || '') + note;
+              }
+            }
+
+            this.handleStreamEvent(event, (evt) => {
+              if (evt.type === 'text') {
+                accumulatedOutput += evt.message;
+              }
+              notifyProgress(evt);
+            });
+          } catch {
+            // Raw non-JSON line
+            accumulatedOutput += line + '\n';
+          }
+        };
+
         child.stdout?.on('data', (chunk: Buffer) => {
           if (this.currentRun?.runId !== runId) return;
           stdoutBuffer += chunk.toString('utf8');
@@ -166,38 +203,7 @@ export class VaultTaskRunner {
           stdoutBuffer = lines.pop() || '';
 
           for (const line of lines) {
-            const trimmed = line.trim();
-            if (!trimmed) continue;
-
-            try {
-              const event = JSON.parse(trimmed) as StreamEvent;
-              if (event.event === 'result' && event.result) {
-                if (event.result.status === 'ERROR') {
-                  terminalError = event.result.error || event.result.message || 'Antigravity execution failed';
-                }
-                if (typeof event.result.response === 'string') {
-                  resultResponse = event.result.response;
-                }
-                if (Array.isArray(event.result.denied_actions) && event.result.denied_actions.length > 0) {
-                  const deniedList = event.result.denied_actions
-                    .map((d) => d.display_name || d.action)
-                    .filter(Boolean)
-                    .join(', ');
-                  const note = `\n\n> [!WARNING] Restricted Execution: Certain tool permissions were denied (${deniedList}). Enable "Allow Unrestricted Tasks" in settings if autonomous tool execution is needed.`;
-                  resultResponse = (resultResponse || '') + note;
-                }
-              }
-
-              this.handleStreamEvent(event, (evt) => {
-                if (evt.type === 'text') {
-                  accumulatedOutput += evt.message;
-                }
-                notifyProgress(evt);
-              });
-            } catch {
-              // Raw non-JSON line
-              accumulatedOutput += line + '\n';
-            }
+            processLine(line);
           }
         });
 
@@ -229,6 +235,12 @@ export class VaultTaskRunner {
           if (runRecord.isSettled) return;
           runRecord.isSettled = true;
 
+          // The final line (often the 'result' event) may lack a trailing newline.
+          if (this.currentRun?.runId === runId && stdoutBuffer.trim()) {
+            processLine(stdoutBuffer);
+            stdoutBuffer = '';
+          }
+
           const isCurrent = this.currentRun?.runId === runId;
           if (runRecord.isAborted) {
             if (isCurrent) {
@@ -243,9 +255,10 @@ export class VaultTaskRunner {
 
           if (code === 0 && !terminalError) {
             if (isCurrent) {
+              // notifyProgress drops events once currentRun is cleared, so emit first.
+              notifyProgress({ type: 'done', message: t('notices.taskCompletedProgress') });
               this.currentRun = null;
               this.updateStatus('idle');
-              notifyProgress({ type: 'done', message: t('notices.taskCompletedProgress') });
               new Notice(t('notices.taskCompleted'));
             }
             resolve(partial);
@@ -371,7 +384,7 @@ export class VaultTaskRunner {
       });
     }
 
-    return t('notices.processExitError', { code });
+    return t('notices.processExitError', { code: code ?? 'unknown' });
   }
 
   private handleStreamEvent(event: StreamEvent, emit: (event: TaskProgressEvent) => void): void {

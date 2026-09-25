@@ -371,8 +371,51 @@ describe('VaultTaskRunner', () => {
     await expect(runPromise).rejects.toThrow(/something specific broke/);
   });
 
-  it('includes --dangerously-skip-permissions when allowUnrestrictedTasks is enabled', async () => {
+  it('omits --dangerously-skip-permissions when unrestricted mode is enabled but not confirmed', async () => {
     mockSettings.allowUnrestrictedTasks = true;
+    mockSettings.unrestrictedConfirmed = false;
+    const fakeChild: any = new EventEmitter();
+    fakeChild.stdout = new EventEmitter();
+    fakeChild.stderr = new EventEmitter();
+
+    const spawnSpy = jest.spyOn(AgyProcess, 'spawnProcess').mockReturnValue(fakeChild);
+
+    const runPromise = runner.runTask('/bin/agy', {
+      prompt: 'Summarize note',
+      context: { scope: 'vault' },
+    });
+
+    expect(spawnSpy.mock.calls[0][0].args).not.toContain('--dangerously-skip-permissions');
+    fakeChild.emit('exit', 0);
+    await runPromise;
+  });
+
+  it('parses a final result line that has no trailing newline and emits done', async () => {
+    const fakeChild: any = new EventEmitter();
+    fakeChild.stdout = new EventEmitter();
+    fakeChild.stderr = new EventEmitter();
+    jest.spyOn(AgyProcess, 'spawnProcess').mockReturnValue(fakeChild);
+
+    const events: string[] = [];
+    const runPromise = runner.runTask(
+      '/bin/agy',
+      { prompt: 'Summarize note', context: { scope: 'vault' } },
+      (evt) => events.push(evt.type),
+    );
+
+    fakeChild.stdout.emit(
+      'data',
+      Buffer.from(JSON.stringify({ event: 'result', result: { status: 'SUCCESS', response: 'Tail' } })),
+    );
+    fakeChild.emit('exit', 0);
+
+    await expect(runPromise).resolves.toBe('Tail');
+    expect(events).toContain('done');
+  });
+
+  it('includes --dangerously-skip-permissions when unrestricted mode is enabled and confirmed', async () => {
+    mockSettings.allowUnrestrictedTasks = true;
+    mockSettings.unrestrictedConfirmed = true;
     const fakeChild: any = new EventEmitter();
     fakeChild.stdout = new EventEmitter();
     fakeChild.stderr = new EventEmitter();

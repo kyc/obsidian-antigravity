@@ -15,8 +15,6 @@ import {
 } from './AgyProfile';
 import { t } from '../i18n';
 
-export * from './AgyProfile';
-
 interface InFlightHubStart {
   profile: string;
   vaultPath: string;
@@ -50,6 +48,8 @@ export class AgyHubManager {
   private startMutex: Promise<void> = Promise.resolve();
   private killEscalation: KillEscalation | null = null;
   private recentOutput: string[] = [];
+  /** Bumped by stopHub so an in-flight start knows it was cancelled. */
+  private startGeneration = 0;
 
   async startHub(
     agyExecutable: string,
@@ -104,10 +104,15 @@ export class AgyHubManager {
       ) {
         this.stopHub();
       }
+      const generation = this.startGeneration;
 
       // Terminate any stale/orphan hub processes for this profile from previous sessions or crashes
       await this.cleanupStaleHubs(safeProfile);
 
+      if (preferredPort > 0) {
+        // Otherwise waitForPort would accept whatever server already owns the port.
+        await this.assertPortAvailable(preferredPort);
+      }
       const port = preferredPort > 0 ? preferredPort : await this.getFreePort();
       const projectId = ensureVaultProject(vaultPath);
       ensureDefaultProjectId(safeProfile, projectId);
@@ -194,6 +199,13 @@ export class AgyHubManager {
 
         const message = (err as Error).message;
         throw new Error(detail ? `${message}\n${detail}` : message);
+      }
+
+      if (generation !== this.startGeneration) {
+        // stopHub ran while we were waiting; don't resurrect an orphan daemon.
+        removeHubInstanceMetadata(safeProfile);
+        AgyProcess.killProcess(child, true);
+        throw new Error('Antigravity hub start was cancelled.');
       }
 
       this.hubProcess = child;
@@ -290,6 +302,7 @@ export class AgyHubManager {
   }
 
   stopHub(): void {
+    this.startGeneration++;
     this.clearKillEscalation();
     if (this.currentProfile) {
       removeHubInstanceMetadata(this.currentProfile);
@@ -330,6 +343,22 @@ export class AgyHubManager {
   /** Recent hub output, useful for diagnosing a failed start. */
   getRecentOutput(): string {
     return this.recentOutput.join('\n');
+  }
+
+  protected assertPortAvailable(port: number): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const srv = net.createServer();
+      srv.once('error', (err: NodeJS.ErrnoException) => {
+        reject(
+          err.code === 'EADDRINUSE'
+            ? new Error(`Port ${port} is already in use by another process.`)
+            : err,
+        );
+      });
+      srv.listen(port, '127.0.0.1', () => {
+        srv.close((err) => (err ? reject(err) : resolve()));
+      });
+    });
   }
 
   private getFreePort(): Promise<number> {

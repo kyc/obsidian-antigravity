@@ -59,7 +59,7 @@ export default class AntigravityPlugin extends Plugin {
           () => this.settings.hubPort,
           () => this.settings.hubProfile || 'antigravity-obsidian',
           () => this.settings.defaultAgent,
-          () => this.settings.allowUnrestrictedTasks,
+          () => this.isHubUnrestrictedAllowed(),
         ),
     );
 
@@ -200,7 +200,7 @@ export default class AntigravityPlugin extends Plugin {
             this.settings.hubPort,
             this.settings.hubProfile || 'antigravity-obsidian',
             this.settings.defaultAgent,
-            this.settings.allowUnrestrictedTasks,
+            this.isHubUnrestrictedAllowed(),
           )
           .catch((err: unknown) => {
             // Auto-start runs in the background, but failing silently leaves
@@ -249,6 +249,14 @@ export default class AntigravityPlugin extends Plugin {
 
     await this.saveData(this.settings);
     setConfiguredLanguage(this.settings.language);
+  }
+
+  /**
+   * The hub may run unrestricted only with its own confirmation; a task-level
+   * approval must never carry over to an interactive, multi-turn hub session.
+   */
+  private isHubUnrestrictedAllowed(): boolean {
+    return this.settings.allowUnrestrictedTasks && this.settings.hubUnrestrictedConfirmed;
   }
 
   openTaskModal(contextOverride?: TaskContext): void {
