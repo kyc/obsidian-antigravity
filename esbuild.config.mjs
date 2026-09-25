@@ -13,6 +13,15 @@ Obsidian Antigravity Plugin
 
 const prod = process.argv[2] === 'production';
 
+// Load .env.local if present on developer machines when unset in environment
+if (!process.env.OBSIDIAN_PLUGIN_PATH && existsSync('.env.local') && typeof process.loadEnvFile === 'function') {
+  try {
+    process.loadEnvFile('.env.local');
+  } catch {
+    // Ignore malformed or inaccessible .env.local
+  }
+}
+
 // Where to mirror the built plugin for local testing. Only meaningful on a
 // developer machine; CI sets neither variable and the copy step is skipped.
 const VAULT_PLUGIN_DIR = process.env.OBSIDIAN_PLUGIN_PATH || '';
