@@ -8,6 +8,7 @@ export class HubView extends ItemView {
   private iframeEl: HTMLIFrameElement | null = null;
   private loadingEl: HTMLElement | null = null;
   private container!: HTMLElement;
+  private isClosed: boolean = false;
 
   constructor(
     leaf: WorkspaceLeaf,
@@ -53,14 +54,33 @@ export class HubView extends ItemView {
   }
 
   async onOpen(): Promise<void> {
+    this.isClosed = false;
     this.container = this.contentEl;
     this.container.empty();
     this.container.addClass('antigravity-hub-view-container');
 
-    await this.initHub();
+    // Immediate non-blocking feedback
+    this.renderLoading(t('hubView.starting'));
+
+    // If Obsidian workspace layout is still restoring tabs during startup,
+    // defer daemon startup until other tabs, markdown files, and layout are ready.
+    const app = this.app || (this.leaf as unknown as { app?: import('obsidian').App }).app;
+    if (app?.workspace && !app.workspace.layoutReady) {
+      app.workspace.onLayoutReady(() => {
+        window.setTimeout(() => {
+          if (!this.isClosed) {
+            void this.initHub();
+          }
+        }, 50);
+      });
+      return;
+    }
+
+    void this.initHub();
   }
 
   async onClose(): Promise<void> {
+    this.isClosed = true;
     this.container.empty();
   }
 
@@ -72,6 +92,10 @@ export class HubView extends ItemView {
   }
 
   private async initHub(): Promise<void> {
+    if (this.isClosed) {
+      return;
+    }
+
     // Deliberately resolve the binary and vault *before* the already-running
     // fast path below. The alternative — checking `isRunning()` first — would
     // keep the happy path marginally cheaper but report an error for a live hub
@@ -103,7 +127,9 @@ export class HubView extends ItemView {
       this.hubManager.getDangerouslySkipPermissions() === allowUnrestricted &&
       this.hubManager.getProxyUrl() === (proxyUrl.trim() || '')
     ) {
-      this.renderIframe(this.getThemedHubUrl());
+      if (!this.isClosed) {
+        this.renderIframe(this.getThemedHubUrl());
+      }
       return;
     }
 
@@ -119,13 +145,18 @@ export class HubView extends ItemView {
         allowUnrestricted,
         proxyUrl,
       );
-      this.renderIframe(this.getThemedHubUrl());
+      if (!this.isClosed) {
+        this.renderIframe(this.getThemedHubUrl());
+      }
     } catch (err) {
-      this.renderError(t('hubView.errFailedStart', { error: (err as Error).message }));
+      if (!this.isClosed) {
+        this.renderError(t('hubView.errFailedStart', { error: (err as Error).message }));
+      }
     }
   }
 
   private renderLoading(message: string): void {
+    if (this.isClosed) return;
     if (this.iframeEl) {
       this.iframeEl.remove();
       this.iframeEl = null;
@@ -141,6 +172,7 @@ export class HubView extends ItemView {
   }
 
   private renderError(message: string): void {
+    if (this.isClosed) return;
     if (this.loadingEl) {
       this.loadingEl.empty();
       this.loadingEl.createEl('p', { text: `⚠️ ${message}`, cls: 'mod-warning' });
@@ -153,6 +185,7 @@ export class HubView extends ItemView {
   }
 
   private renderIframe(url: string): void {
+    if (this.isClosed) return;
     if (this.loadingEl) {
       this.loadingEl.remove();
       this.loadingEl = null;
@@ -174,7 +207,7 @@ export class HubView extends ItemView {
       this.iframeEl.src = 'about:blank';
       const win = typeof activeWindow !== 'undefined' ? activeWindow : window;
       win.setTimeout(() => {
-        if (this.iframeEl) this.iframeEl.src = targetUrl;
+        if (this.iframeEl && !this.isClosed) this.iframeEl.src = targetUrl;
       }, 100);
     } else {
       void this.initHub();

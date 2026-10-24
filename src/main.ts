@@ -168,9 +168,6 @@ export default class AntigravityPlugin extends Plugin {
     // Settings Tab
     this.addSettingTab(new AntigravitySettingTab(this.app, this, this.resolver));
 
-    // Clean up any stale hub instances from previous crashes or ungraceful exits
-    void this.hubManager.cleanupStaleHubs(this.settings.hubProfile || 'antigravity-obsidian');
-
     // Register window lifecycle events for graceful shutdown on close or reload
     this.registerDomEvent(window, 'beforeunload', () => {
       this.cleanupProcesses();
@@ -189,33 +186,39 @@ export default class AntigravityPlugin extends Plugin {
       });
     }
 
-    // Auto-start Hub if enabled
-    if (this.settings.autoStartHub) {
-      const exec = this.resolver.resolve(this.settings.cliPath);
-      const vaultPath = this.vaultContext.getVaultBasePath();
-      if (exec && vaultPath) {
-        this.hubManager
-          .startHub(
-            exec,
-            vaultPath,
-            this.settings.hubPort,
-            this.settings.hubProfile || 'antigravity-obsidian',
-            this.settings.defaultAgent,
-            this.isHubUnrestrictedAllowed(),
-            this.settings.proxyUrl,
-          )
-          .catch((err: unknown) => {
-            // Auto-start runs in the background, but failing silently leaves
-            // the user with a hub that never comes up and no explanation.
-            new Notice(t('notices.hubAutoStartFailed', { error: (err as Error).message }));
-            this.statusBar.update('error', t('statusBar.hubStartFailed'));
-          });
-      } else if (!exec) {
-        new Notice(t('notices.cliNotFound'));
-      } else {
-        new Notice(t('notices.vaultPathUnavailable'));
+    // Defer stale hub cleanup and auto-start until workspace layout is fully ready
+    this.app.workspace.onLayoutReady(() => {
+      // Clean up any stale hub instances from previous crashes or ungraceful exits
+      void this.hubManager.cleanupStaleHubs(this.settings.hubProfile || 'antigravity-obsidian');
+
+      // Auto-start Hub if enabled
+      if (this.settings.autoStartHub) {
+        const exec = this.resolver.resolve(this.settings.cliPath);
+        const vaultPath = this.vaultContext.getVaultBasePath();
+        if (exec && vaultPath) {
+          this.hubManager
+            .startHub(
+              exec,
+              vaultPath,
+              this.settings.hubPort,
+              this.settings.hubProfile || 'antigravity-obsidian',
+              this.settings.defaultAgent,
+              this.isHubUnrestrictedAllowed(),
+              this.settings.proxyUrl,
+            )
+            .catch((err: unknown) => {
+              // Auto-start runs in the background, but failing silently leaves
+              // the user with a hub that never comes up and no explanation.
+              new Notice(t('notices.hubAutoStartFailed', { error: (err as Error).message }));
+              this.statusBar.update('error', t('statusBar.hubStartFailed'));
+            });
+        } else if (!exec) {
+          new Notice(t('notices.cliNotFound'));
+        } else {
+          new Notice(t('notices.vaultPathUnavailable'));
+        }
       }
-    }
+    });
   }
 
   cleanupProcesses(): void {
