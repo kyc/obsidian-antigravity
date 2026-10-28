@@ -125,7 +125,7 @@ npm run build
 npm run dev          # 监听模式，自动重新构建
 npm run build        # 生产构建输出 main.js 并同步至库
 npm run typecheck    # 检查 TypeScript 类型
-npm test             # 运行 Jest 单元测试（9 个套件，121 个测试）
+npm test             # 运行 Jest 单元测试（10 个套件，141 个测试）
 npm run lint         # 使用 eslint-plugin-obsidianmd 检查源码
 ```
 
@@ -142,6 +142,16 @@ npm run typecheck && npm test && npm run build && npm run lint
 - [架构与开发笔记](docs/ARCHITECTURE_AND_DEV_NOTES.md)
 - [Hub 能力边界](docs/HUB_CAPABILITY_BOUNDARIES.md)
 - [代码审查记录](docs/CODE_REVIEW_2026-09.md)
+
+---
+
+## 贡献者
+
+感谢所有为 Obsidian Antigravity 做出贡献的开发者：
+
+- [kyc](https://github.com/kyc)
+- [Mason Blaschak](https://github.com/profblackjack) ([@profblackjack](https://github.com/profblackjack))
+- [Sunny Lin](https://github.com/SunnyYYLin) ([@SunnyYYLin](https://github.com/SunnyYYLin))
 
 ---
 

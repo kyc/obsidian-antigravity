@@ -125,7 +125,7 @@ Reasoning intensity is part of the model ID itself. `agy` rejects a `--model` ca
 npm run dev          # Watch mode with automatic rebuild
 npm run build        # Production bundle to main.js and sync to vault
 npm run typecheck    # Verify TypeScript types
-npm test             # Run the Jest unit test suite (9 suites, 121 tests)
+npm test             # Run the Jest unit test suite (10 suites, 141 tests)
 npm run lint         # Lint source files with eslint-plugin-obsidianmd
 ```
 
@@ -142,6 +142,16 @@ Additional documentation:
 - [Architecture and development notes](docs/ARCHITECTURE_AND_DEV_NOTES.md)
 - [Hub capability boundaries](docs/HUB_CAPABILITY_BOUNDARIES.md)
 - [Code review notes](docs/CODE_REVIEW_2026-09.md)
+
+---
+
+## Contributors
+
+Thanks to everyone who has contributed to Obsidian Antigravity:
+
+- [kyc](https://github.com/kyc)
+- [Mason Blaschak](https://github.com/profblackjack) ([@profblackjack](https://github.com/profblackjack))
+- [Sunny Lin](https://github.com/SunnyYYLin) ([@SunnyYYLin](https://github.com/SunnyYYLin))
 
 ---
 
