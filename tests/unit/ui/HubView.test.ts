@@ -144,6 +144,53 @@ describe('HubView', () => {
     expect(mockHubManager.startHub).not.toHaveBeenCalled();
   });
 
+  it('cancels startup timer when closed during the deferral delay', async () => {
+    mockApp.workspace.layoutReady = false;
+    let layoutReadyCallback: (() => void) | null = null;
+    mockApp.workspace.onLayoutReady = jest.fn().mockImplementation((cb: () => void) => {
+      layoutReadyCallback = cb;
+    });
+
+    const view = new HubView(
+      mockLeaf as WorkspaceLeaf,
+      mockHubManager,
+      () => '/usr/bin/agy',
+      () => '/mock/vault',
+      () => 4096,
+      () => 'antigravity-obsidian',
+    );
+
+    await view.onOpen();
+
+    // Trigger onLayoutReady, which starts the 50ms startup timer
+    if (layoutReadyCallback) {
+      (layoutReadyCallback as () => void)();
+    }
+
+    // Advance 20ms (timer is active), then close the view
+    jest.advanceTimersByTime(20);
+    await view.onClose();
+
+    // Advance beyond the remaining timer window
+    jest.advanceTimersByTime(100);
+    await Promise.resolve();
+
+    expect(mockHubManager.startHub).not.toHaveBeenCalled();
+  });
+
+  it('can close cleanly without error when onOpen was never called', async () => {
+    const view = new HubView(
+      mockLeaf as WorkspaceLeaf,
+      mockHubManager,
+      () => '/usr/bin/agy',
+      () => '/mock/vault',
+      () => 4096,
+      () => 'antigravity-obsidian',
+    );
+
+    await expect(view.onClose()).resolves.toBeUndefined();
+  });
+
   it('reuses existing running hub without calling startHub again', async () => {
     mockApp.workspace.layoutReady = true;
     mockHubManager.isRunning = jest.fn().mockReturnValue(true);

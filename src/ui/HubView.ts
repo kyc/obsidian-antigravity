@@ -9,6 +9,7 @@ export class HubView extends ItemView {
   private loadingEl: HTMLElement | null = null;
   private container!: HTMLElement;
   private isClosed: boolean = false;
+  private startupTimer: number | null = null;
 
   constructor(
     leaf: WorkspaceLeaf,
@@ -55,6 +56,10 @@ export class HubView extends ItemView {
 
   async onOpen(): Promise<void> {
     this.isClosed = false;
+    if (this.startupTimer !== null) {
+      window.clearTimeout(this.startupTimer);
+      this.startupTimer = null;
+    }
     this.container = this.contentEl;
     this.container.empty();
     this.container.addClass('antigravity-hub-view-container');
@@ -64,10 +69,11 @@ export class HubView extends ItemView {
 
     // If Obsidian workspace layout is still restoring tabs during startup,
     // defer daemon startup until other tabs, markdown files, and layout are ready.
-    const app = this.app || (this.leaf as unknown as { app?: import('obsidian').App }).app;
+    const app = this.app;
     if (app?.workspace && !app.workspace.layoutReady) {
       app.workspace.onLayoutReady(() => {
-        window.setTimeout(() => {
+        this.startupTimer = window.setTimeout(() => {
+          this.startupTimer = null;
           if (!this.isClosed) {
             void this.initHub();
           }
@@ -81,7 +87,13 @@ export class HubView extends ItemView {
 
   async onClose(): Promise<void> {
     this.isClosed = true;
-    this.container.empty();
+    if (this.startupTimer !== null) {
+      window.clearTimeout(this.startupTimer);
+      this.startupTimer = null;
+    }
+    this.container?.empty();
+    this.iframeEl = null;
+    this.loadingEl = null;
   }
 
   private getThemedHubUrl(): string {
