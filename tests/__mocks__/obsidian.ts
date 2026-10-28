@@ -56,16 +56,35 @@ export class PluginSettingTab {
 export class ItemView {
   app: any;
   leaf: any;
-  containerEl: any = {
-    children: [{}, { empty: jest.fn(), addClass: jest.fn(), createDiv: jest.fn().mockReturnValue({
-      createEl: jest.fn().mockReturnValue({ addEventListener: jest.fn(), setAttribute: jest.fn() }),
-      createDiv: jest.fn().mockReturnValue({ createEl: jest.fn().mockReturnValue({ addEventListener: jest.fn() }) }),
-    }) }],
-  };
+  contentEl: any;
+  containerEl: any;
 
   constructor(leaf: any) {
     this.leaf = leaf;
+    this.app = leaf?.app;
+    const makeEl = () => ({
+      empty: jest.fn(),
+      addClass: jest.fn(),
+      removeClass: jest.fn(),
+      remove: jest.fn(),
+      setAttribute: jest.fn(),
+      addEventListener: jest.fn(),
+      createDiv: jest.fn().mockImplementation(() => makeEl()),
+      createEl: jest.fn().mockImplementation(() => makeEl()),
+    });
+    this.contentEl = makeEl();
+    this.containerEl = {
+      children: [{}, this.contentEl],
+      empty: jest.fn(),
+      addClass: jest.fn(),
+      createDiv: jest.fn().mockImplementation(() => makeEl()),
+      createEl: jest.fn().mockImplementation(() => makeEl()),
+    };
   }
+
+  addAction = jest.fn();
+  onload = jest.fn();
+  registerDomEvent = jest.fn();
 
   getViewType(): string {
     return '';
@@ -129,6 +148,8 @@ export class App {
     },
   };
   workspace: any = {
+    layoutReady: true,
+    onLayoutReady: jest.fn().mockImplementation((cb: () => any) => cb()),
     getLeavesOfType: jest.fn().mockReturnValue([]),
     getActiveViewOfType: jest.fn().mockReturnValue(null),
     getMostRecentLeaf: jest.fn().mockReturnValue(null),
