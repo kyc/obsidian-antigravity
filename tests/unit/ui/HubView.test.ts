@@ -30,6 +30,7 @@ describe('HubView', () => {
 
   afterEach(() => {
     jest.useRealTimers();
+    delete (globalThis as { activeDocument?: unknown }).activeDocument;
   });
 
   it('has the correct view type and display text', () => {
@@ -209,5 +210,108 @@ describe('HubView', () => {
 
     expect(mockHubManager.startHub).not.toHaveBeenCalled();
     expect(mockHubManager.getHubUrl).toHaveBeenCalled();
+  });
+
+  it('mounts Electron <webview> with sanitized partition, allowpopups, and bootstrap token URL', async () => {
+    (globalThis as { activeDocument?: unknown }).activeDocument = {
+      body: { classList: { contains: (cls: string) => cls === 'theme-dark' } },
+    };
+    mockApp.workspace.layoutReady = true;
+    mockHubManager.getHubUrl = jest.fn().mockImplementation((opts?: { hostTheme?: 'dark' | 'light' }) => {
+      const theme = opts?.hostTheme ?? 'light';
+      return `http://127.0.0.1:4096/?section=test&hostTheme=${theme}&useWebSocket=true#t=boot-tok-123`;
+    });
+
+    const view = new HubView(
+      mockLeaf as WorkspaceLeaf,
+      mockHubManager,
+      () => '/usr/bin/agy',
+      () => '/mock/vault',
+      () => 4096,
+      () => '../evil profile!',
+    );
+
+    await view.onOpen();
+    await Promise.resolve();
+
+    const webview = view.contentEl.children.find((el: any) => el.tagName === 'WEBVIEW');
+    expect(webview).toBeDefined();
+    expect(webview.className).toContain('antigravity-hub-webview');
+    expect(webview.getAttribute('allowpopups')).toBe('');
+    expect(webview.getAttribute('partition')).toBe('persist:antigravity-evilprofile');
+    expect(webview.getAttribute('src')).toBe(
+      'http://127.0.0.1:4096/?section=test&hostTheme=dark&useWebSocket=true#t=boot-tok-123',
+    );
+  });
+
+  it('reloads <webview> via about:blank and respects isClosed when timer fires', async () => {
+    mockApp.workspace.layoutReady = true;
+    mockHubManager.isRunning = jest.fn().mockReturnValue(true);
+    mockHubManager.getHubUrl = jest.fn().mockImplementation((opts?: { hostTheme?: 'dark' | 'light' }) => {
+      const theme = opts?.hostTheme ?? 'light';
+      return `http://127.0.0.1:4096/?section=test&hostTheme=${theme}&useWebSocket=true#t=tok-xyz`;
+    });
+
+    const view = new HubView(
+      mockLeaf as WorkspaceLeaf,
+      mockHubManager,
+      () => '/usr/bin/agy',
+      () => '/mock/vault',
+      () => 4096,
+      () => 'antigravity-obsidian',
+    );
+
+    view.onload();
+    await view.onOpen();
+    await Promise.resolve();
+
+    const webview = view.contentEl.children.find((el: any) => el.tagName === 'WEBVIEW');
+    expect(webview).toBeDefined();
+
+    const reloadCall = (view.addAction as jest.Mock).mock.calls.find(
+      (call) => call[0] === 'refresh-cw',
+    );
+    expect(reloadCall).toBeDefined();
+
+    reloadCall[2]();
+    expect(webview.getAttribute('src')).toBe('about:blank');
+
+    jest.advanceTimersByTime(100);
+    expect(webview.getAttribute('src')).toBe(
+      'http://127.0.0.1:4096/?section=test&hostTheme=light&useWebSocket=true#t=tok-xyz',
+    );
+
+    // Trigger reload and close before timeout elapses: closed view should not restore src
+    reloadCall[2]();
+    expect(webview.getAttribute('src')).toBe('about:blank');
+    await view.onClose();
+    jest.advanceTimersByTime(100);
+    expect(webview.getAttribute('src')).toBe('about:blank');
+  });
+
+  it('renders an error message with retry button when CLI executable is missing', async () => {
+    mockApp.workspace.layoutReady = true;
+
+    const view = new HubView(
+      mockLeaf as WorkspaceLeaf,
+      mockHubManager,
+      () => null,
+      () => '/mock/vault',
+      () => 4096,
+      () => 'antigravity-obsidian',
+    );
+
+    await view.onOpen();
+    await Promise.resolve();
+
+    const loadingBox = view.contentEl.children.find((el: any) =>
+      el.className?.includes('antigravity-hub-loading'),
+    );
+    expect(loadingBox).toBeDefined();
+    const errP = loadingBox.children.find((el: any) => el.tagName === 'P');
+    expect(errP?.textContent).toContain('CLI');
+    const retryBtn = loadingBox.children.find((el: any) => el.tagName === 'BUTTON');
+    expect(retryBtn).toBeDefined();
+    expect(retryBtn.type).toBe('button');
   });
 });

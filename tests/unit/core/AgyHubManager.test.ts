@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { Notice } from 'obsidian';
-import { AgyHubManager } from '../../../src/core/AgyHubManager';
+import { AgyHubManager, extractHubBootstrapToken } from '../../../src/core/AgyHubManager';
 import { loadHubInstanceMetadata, saveHubInstanceMetadata } from '../../../src/core/AgyProfile';
 
 describe('AgyHubManager', () => {
@@ -41,6 +41,42 @@ describe('AgyHubManager', () => {
 
       const lightUrl = hubManager.getHubUrl({ hostTheme: 'light' });
       expect(lightUrl).toBe('http://127.0.0.1:41891/?hostTheme=light&useWebSocket=true');
+    });
+
+    it('appends #t=<bootstrapToken> after query string when bootstrapToken is present', () => {
+      (hubManager as unknown as { port: number }).port = 41891;
+      (hubManager as unknown as { bootstrapToken: string }).bootstrapToken = 'tok/abc+123';
+
+      const url = hubManager.getHubUrl({ hostTheme: 'dark', section: 'obsidian-vault-1234abcd' });
+      expect(url).toBe(
+        'http://127.0.0.1:41891/?section=obsidian-vault-1234abcd&hostTheme=dark&useWebSocket=true#t=tok%2Fabc%2B123',
+      );
+    });
+  });
+
+  describe('extractHubBootstrapToken', () => {
+    it('extracts token from localhost, 127.0.0.1, and IPv6 loopback URLs', () => {
+      expect(
+        extractHubBootstrapToken('  ➜  Open in your browser:  http://localhost:33357/#t=abc-123_XYZ\n'),
+      ).toBe('abc-123_XYZ');
+      expect(
+        extractHubBootstrapToken('http://127.0.0.1:41000/#t=loopback-tok'),
+      ).toBe('loopback-tok');
+      expect(
+        extractHubBootstrapToken('http://[::1]:41000/?foo=1#t=v6-tok'),
+      ).toBe('v6-tok');
+    });
+
+    it('strips ANSI escape sequences and decodes URL-encoded tokens with extra hash params', () => {
+      const ansiLine = '\u001b[32mOpen in your browser:\u001b[0m http://localhost:33357/?useWebSocket=true#foo=1&t=tok%2F123&bar=2\u001b[0m';
+      expect(extractHubBootstrapToken(ansiLine)).toBe('tok/123');
+    });
+
+    it('returns null for non-matching lines or non-loopback hosts', () => {
+      expect(extractHubBootstrapToken('Language server listening on port 33357')).toBeNull();
+      expect(extractHubBootstrapToken('https://example.com:443/#t=secret')).toBeNull();
+      expect(extractHubBootstrapToken('http://localhost:33357/#t=')).toBeNull();
+      expect(extractHubBootstrapToken('')).toBeNull();
     });
   });
 
@@ -337,6 +373,87 @@ describe('AgyHubManager', () => {
       expect(hubManager.getProxyUrl()).toBe('http://127.0.0.1:7897');
 
       spawnSpy.mockRestore();
+    });
+
+    it('captures #t=<token> emitted shortly after waitForPort, redacts diagnostics, and clears on stopHub', async () => {
+      const childProcess = require('child_process');
+      const stdout = new EventEmitter();
+      const stderr = new EventEmitter();
+      (stdout as any).resume = jest.fn();
+      (stderr as any).resume = jest.fn();
+
+      const spawnSpy = jest.spyOn(childProcess, 'spawn').mockReturnValue({
+        on: jest.fn(),
+        off: jest.fn(),
+        kill: jest.fn(),
+        killed: false,
+        exitCode: null,
+        stdout,
+        stderr,
+      } as any);
+      jest.spyOn(hubManager as any, 'waitForPort').mockResolvedValue(undefined);
+
+      const startPromise = hubManager.startHub('/bin/agy', '/test/vault', 42505, 'token-profile');
+
+      setTimeout(() => {
+        stdout.emit(
+          'data',
+          Buffer.from('  ➜  Open in your browser:  http://localhost:42505/#t=super-secret-bootstrap-token\n'),
+        );
+      }, 25);
+
+      const returnedUrl = await startPromise;
+      expect(returnedUrl).toContain('#t=super-secret-bootstrap-token');
+      expect(hubManager.getHubUrl({ hostTheme: 'dark' })).toContain('#t=super-secret-bootstrap-token');
+      expect(hubManager.getRecentOutput()).toContain('#t=[REDACTED]');
+      expect(hubManager.getRecentOutput()).not.toContain('super-secret-bootstrap-token');
+
+      hubManager.stopHub();
+      expect((hubManager as unknown as { bootstrapToken: string | null }).bootstrapToken).toBeNull();
+
+      spawnSpy.mockRestore();
+    });
+
+    it('falls back cleanly without #t= when hub stdout never emits a bootstrap token', async () => {
+      const childProcess = require('child_process');
+      const stdout = new EventEmitter();
+      const stderr = new EventEmitter();
+      (stdout as any).resume = jest.fn();
+      (stderr as any).resume = jest.fn();
+
+      const spawnSpy = jest.spyOn(childProcess, 'spawn').mockReturnValue({
+        on: jest.fn(),
+        off: jest.fn(),
+        kill: jest.fn(),
+        killed: false,
+        exitCode: null,
+        stdout,
+        stderr,
+      } as any);
+      jest.spyOn(hubManager as any, 'waitForPort').mockResolvedValue(undefined);
+      const waitTokenSpy = jest
+        .spyOn(hubManager as any, 'waitForBootstrapToken')
+        .mockResolvedValue(undefined);
+
+      const returnedUrl = await hubManager.startHub('/bin/agy', '/test/vault', 42506, 'legacy-profile');
+      expect(waitTokenSpy).toHaveBeenCalled();
+      expect(returnedUrl).not.toContain('#t=');
+      expect(hubManager.getHubUrl()).not.toContain('#t=');
+
+      spawnSpy.mockRestore();
+    });
+
+    it('resolves waitForBootstrapToken cleanly after timeout when no token arrives', async () => {
+      const fakeChild = {
+        on: jest.fn(),
+        off: jest.fn(),
+        killed: false,
+        exitCode: null,
+      } as any;
+
+      await expect(
+        (hubManager as any).waitForBootstrapToken(fakeChild, () => null, jest.fn(), 20),
+      ).resolves.toBeUndefined();
     });
   });
 

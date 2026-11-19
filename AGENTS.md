@@ -36,7 +36,7 @@ Unit tests mirror `src/` under `tests/unit/`.
 | `src/core/AgyHubManager.ts` | Hub daemon supervisor (`agy --hub`), free port allocation, concurrency serialization, stale process cleanup, and diagnostics. |
 | `src/core/VaultContext.ts` | Obsidian vault context extractor (active note, selection, folder), path traversal sanitization, and vault rules maintenance. |
 | `src/core/VaultTaskRunner.ts` | Discrete task execution runner (`agy --print`), active run lifecycle isolation, progress streaming, and permission mode control. |
-| `src/ui/HubView.ts` | Embedded Webview tab (`ItemView`) with native leaf actions (`refresh-cw`, `external-link`) embedding the Antigravity Hub SPA. |
+| `src/ui/HubView.ts` | Embedded Electron `<webview>` tab (`ItemView`) with native leaf actions (`refresh-cw`, `external-link`) embedding the Antigravity Hub SPA. |
 | `src/ui/StatusBarItem.ts` | Real-time status indicator, spinner, and click-to-cancel interaction. |
 | `src/ui/TaskModal.ts` | Task execution dialog with context badge and action presets. |
 | `src/ui/ConfirmModal.ts` | Confirmation dialog for dangerous actions (unrestricted autonomous execution). |
@@ -57,7 +57,7 @@ Unit tests mirror `src/` under `tests/unit/`.
 2. **Project Auto-Registration & Collision Resistance**:
    - Vault projects are registered under `~/.gemini/config/projects/obsidian-${cleanName}-${hash}.json` linking `file://${vaultPath}`.
    - The 8-character SHA256 path hash guarantees distinct project configurations for different vaults with identical folder names.
-   - Hub URLs explicitly specify `?section=${projectId}&hostTheme=${theme}` to ensure the correct workspace is loaded on boot.
+   - Hub URLs explicitly specify `?section=${projectId}&hostTheme=${theme}&useWebSocket=true` (plus `#t=<token>` when emitted by `agy --hub` for authenticated UI bootstrap) to ensure the correct workspace and session are loaded on boot.
 
 3. **Task Execution & Permission Safety Gating**:
    - Discrete tasks execute via official `agy --print <prompt> --output-format stream-json --add-dir <vaultPath>`.

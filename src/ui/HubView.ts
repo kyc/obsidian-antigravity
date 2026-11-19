@@ -1,11 +1,22 @@
 import { ItemView, Notice, WorkspaceLeaf } from 'obsidian';
 import { AgyHubManager } from '../core/AgyHubManager';
+import { sanitizeProfile } from '../core/AgyProfile';
 import { t } from '../i18n';
 
 export const ANTIGRAVITY_HUB_VIEW_TYPE = 'antigravity-hub-view';
 
+interface ElectronWebviewElement extends HTMLElement {
+  src: string;
+}
+
+declare global {
+  interface HTMLElementTagNameMap {
+    webview: ElectronWebviewElement;
+  }
+}
+
 export class HubView extends ItemView {
-  private iframeEl: HTMLIFrameElement | null = null;
+  private webviewEl: ElectronWebviewElement | null = null;
   private loadingEl: HTMLElement | null = null;
   private container!: HTMLElement;
   private isClosed: boolean = false;
@@ -29,7 +40,7 @@ export class HubView extends ItemView {
     super.onload();
 
     this.addAction('refresh-cw', t('hubView.reloadAction'), () => {
-      this.reloadIframe();
+      this.reloadWebview();
     });
 
     this.addAction('external-link', t('hubView.openBrowserAction'), () => {
@@ -92,7 +103,7 @@ export class HubView extends ItemView {
       this.startupTimer = null;
     }
     this.container?.empty();
-    this.iframeEl = null;
+    this.webviewEl = null;
     this.loadingEl = null;
   }
 
@@ -140,7 +151,7 @@ export class HubView extends ItemView {
       this.hubManager.getProxyUrl() === (proxyUrl.trim() || '')
     ) {
       if (!this.isClosed) {
-        this.renderIframe(this.getThemedHubUrl());
+        this.renderWebview(this.getThemedHubUrl());
       }
       return;
     }
@@ -158,7 +169,7 @@ export class HubView extends ItemView {
         proxyUrl,
       );
       if (!this.isClosed) {
-        this.renderIframe(this.getThemedHubUrl());
+        this.renderWebview(this.getThemedHubUrl());
       }
     } catch (err) {
       if (!this.isClosed) {
@@ -169,9 +180,9 @@ export class HubView extends ItemView {
 
   private renderLoading(message: string): void {
     if (this.isClosed) return;
-    if (this.iframeEl) {
-      this.iframeEl.remove();
-      this.iframeEl = null;
+    if (this.webviewEl) {
+      this.webviewEl.remove();
+      this.webviewEl = null;
     }
     if (!this.loadingEl) {
       this.loadingEl = this.container.createDiv({ cls: 'antigravity-hub-loading' });
@@ -185,41 +196,61 @@ export class HubView extends ItemView {
 
   private renderError(message: string): void {
     if (this.isClosed) return;
-    if (this.loadingEl) {
-      this.loadingEl.empty();
-      this.loadingEl.createEl('p', { text: `⚠️ ${message}`, cls: 'mod-warning' });
-      const retryBtn = this.loadingEl.createEl('button', { text: t('hubView.retryButton') });
-      retryBtn.type = 'button';
-      this.registerDomEvent(retryBtn, 'click', () => {
-        void this.initHub();
-      });
+    if (this.webviewEl) {
+      this.webviewEl.remove();
+      this.webviewEl = null;
     }
+    if (!this.loadingEl) {
+      this.loadingEl = this.container.createDiv({ cls: 'antigravity-hub-loading' });
+    } else {
+      this.loadingEl.empty();
+    }
+    this.loadingEl.createEl('p', { text: `⚠️ ${message}`, cls: 'mod-warning' });
+    const retryBtn = this.loadingEl.createEl('button', { text: t('hubView.retryButton') });
+    retryBtn.type = 'button';
+    this.registerDomEvent(retryBtn, 'click', () => {
+      void this.initHub();
+    });
   }
 
-  private renderIframe(url: string): void {
+  private renderWebview(url: string): void {
     if (this.isClosed) return;
     if (this.loadingEl) {
       this.loadingEl.remove();
       this.loadingEl = null;
     }
 
-    if (!this.iframeEl) {
-      this.iframeEl = this.container.createEl('iframe', {
-        cls: 'antigravity-hub-iframe',
-      });
-      this.iframeEl.setAttribute('allow', 'clipboard-read; clipboard-write; microphone');
+    const partition = `persist:antigravity-${sanitizeProfile(this.getProfile())}`;
+    if (this.webviewEl && this.webviewEl.getAttribute('partition') !== partition) {
+      this.webviewEl.remove();
+      this.webviewEl = null;
     }
 
-    this.iframeEl.src = url;
+    if (!this.webviewEl) {
+      this.webviewEl = this.container.createEl('webview', {
+        cls: 'antigravity-hub-webview',
+        attr: {
+          allowpopups: '',
+          partition,
+        },
+      });
+    }
+
+    this.webviewEl.setAttribute('src', url);
   }
 
-  private reloadIframe(): void {
-    if (this.iframeEl) {
+  private reloadWebview(): void {
+    if (this.webviewEl) {
       const targetUrl = this.getThemedHubUrl();
-      this.iframeEl.src = 'about:blank';
-      const win = typeof activeWindow !== 'undefined' ? activeWindow : window;
-      win.setTimeout(() => {
-        if (this.iframeEl && !this.isClosed) this.iframeEl.src = targetUrl;
+      if (!targetUrl) {
+        void this.initHub();
+        return;
+      }
+      this.webviewEl.setAttribute('src', 'about:blank');
+      window.setTimeout(() => {
+        if (this.webviewEl && !this.isClosed) {
+          this.webviewEl.setAttribute('src', targetUrl);
+        }
       }, 100);
     } else {
       void this.initHub();

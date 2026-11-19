@@ -62,28 +62,77 @@ export class ItemView {
   constructor(leaf: any) {
     this.leaf = leaf;
     this.app = leaf?.app;
-    const makeEl = () => ({
-      empty: jest.fn(),
-      addClass: jest.fn(),
-      removeClass: jest.fn(),
-      remove: jest.fn(),
-      setAttribute: jest.fn(),
-      addEventListener: jest.fn(),
-      createDiv: jest.fn().mockImplementation(() => makeEl()),
-      createEl: jest.fn().mockImplementation(() => makeEl()),
-    });
+    const makeEl = (tag = 'div', opts?: any) => {
+      const el: any = {
+        tagName: tag.toUpperCase(),
+        className: '',
+        textContent: opts?.text ? String(opts.text) : '',
+        type: opts?.type ?? '',
+        parentEl: null as any,
+        children: [] as any[],
+        attributes: {} as Record<string, string>,
+        empty: jest.fn(() => {
+          el.children = [];
+          el.textContent = '';
+        }),
+        addClass: jest.fn((...cls: string[]) => {
+          el.className = [el.className, ...cls].filter(Boolean).join(' ');
+        }),
+        removeClass: jest.fn((...cls: string[]) => {
+          const set = new Set(cls);
+          el.className = el.className
+            .split(/\s+/)
+            .filter((c: string) => c && !set.has(c))
+            .join(' ');
+        }),
+        remove: jest.fn(() => {
+          if (el.parentEl?.children) {
+            el.parentEl.children = el.parentEl.children.filter((c: any) => c !== el);
+          }
+          el.parentEl = null;
+        }),
+        setAttribute: jest.fn((key: string, val: string) => {
+          el.attributes[key] = val;
+        }),
+        getAttribute: jest.fn((key: string) => el.attributes[key] ?? null),
+        addEventListener: jest.fn(),
+        createDiv: jest.fn((childOpts?: any) => {
+          const normalized = typeof childOpts === 'string' ? { cls: childOpts } : childOpts;
+          return el.createEl('div', normalized);
+        }),
+        createEl: jest.fn((childTag: string, childOpts?: any) => {
+          const normalized = typeof childOpts === 'string' ? { cls: childOpts } : childOpts;
+          const child = makeEl(childTag, normalized);
+          child.parentEl = el;
+          el.children.push(child);
+          return child;
+        }),
+      };
+      if (opts?.cls) {
+        const clsList = Array.isArray(opts.cls) ? opts.cls : String(opts.cls).split(/\s+/);
+        el.addClass(...clsList.filter(Boolean));
+      }
+      if (opts?.attr) {
+        for (const [k, v] of Object.entries(opts.attr)) {
+          if (v !== null && v !== undefined) {
+            el.setAttribute(k, String(v));
+          }
+        }
+      }
+      return el;
+    };
     this.contentEl = makeEl();
     this.containerEl = {
       children: [{}, this.contentEl],
       empty: jest.fn(),
       addClass: jest.fn(),
-      createDiv: jest.fn().mockImplementation(() => makeEl()),
-      createEl: jest.fn().mockImplementation(() => makeEl()),
+      createDiv: jest.fn().mockImplementation((opts?: any) => makeEl('div', opts)),
+      createEl: jest.fn().mockImplementation((tag: string, opts?: any) => makeEl(tag, opts)),
     };
   }
 
   addAction = jest.fn();
-  onload = jest.fn();
+  onload(): void {}
   registerDomEvent = jest.fn();
 
   getViewType(): string {
