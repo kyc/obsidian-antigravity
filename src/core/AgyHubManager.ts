@@ -26,6 +26,37 @@ interface InFlightHubStart {
 /** How many trailing hub output chunks to retain for diagnostics. */
 const HUB_OUTPUT_TAIL_LINES = 50;
 
+/** Maximum time to wait for `agy --hub` to print its `#t=<token>` URL after listening. */
+const BOOTSTRAP_TOKEN_WAIT_MS = 1000;
+
+/** Maximum length of a trailing partial stdout line kept while scanning for `#t=`. */
+const STDOUT_LINE_BUFFER_LIMIT = 4096;
+
+const ANSI_CSI_PATTERN = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*[a-zA-Z]`, 'g');
+const HUB_BOOTSTRAP_URL_PATTERN =
+  /https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\]):\d+\/[^\s"'<>]*[#&]t=([^&#\s"'<>]+)/i;
+
+/**
+ * Extracts the UI bootstrap token (`#t=<token>`) from a local `agy --hub`
+ * startup banner line, stripping any ANSI escape sequences first.
+ */
+export function extractHubBootstrapToken(text: string): string | null {
+  if (!text) return null;
+  const clean = text.replace(ANSI_CSI_PATTERN, '');
+  const match = clean.match(HUB_BOOTSTRAP_URL_PATTERN);
+  if (!match?.[1]) {
+    return null;
+  }
+  const rawToken = match[1];
+  try {
+    const decoded = decodeURIComponent(rawToken).trim();
+    return decoded || null;
+  } catch {
+    const fallback = rawToken.trim();
+    return fallback || null;
+  }
+}
+
 export interface WaitForPortOptions {
   /** Port the hub is expected to start listening on. */
   port: number;
@@ -46,6 +77,7 @@ export class AgyHubManager {
   private currentProjectId: string | null = null;
   private currentDangerouslySkipPermissions: boolean = false;
   private currentProxyUrl: string = '';
+  private bootstrapToken: string | null = null;
   private inFlightStart: InFlightHubStart | null = null;
   private startMutex: Promise<void> = Promise.resolve();
   private killEscalation: KillEscalation | null = null;
@@ -177,7 +209,45 @@ export class AgyHubManager {
       // serving requests while still holding the port. Both streams must be
       // consumed; we keep a bounded tail for startup diagnostics.
       this.recentOutput = [];
-      child.stdout?.on('data', this.captureOutput);
+      let capturedBootstrapToken: string | null = null;
+      let stdoutLineBuffer = '';
+      let bootstrapWaiter: (() => void) | null = null;
+
+      const handleStdoutData = (chunk: Buffer): void => {
+        this.captureOutput(chunk);
+        if (capturedBootstrapToken) return;
+
+        stdoutLineBuffer += chunk.toString('utf8');
+        const lines = stdoutLineBuffer.split(/\r?\n/);
+        stdoutLineBuffer = lines.pop() ?? '';
+        if (stdoutLineBuffer.length > STDOUT_LINE_BUFFER_LIMIT) {
+          stdoutLineBuffer = stdoutLineBuffer.slice(-STDOUT_LINE_BUFFER_LIMIT);
+        }
+
+        for (const line of lines) {
+          const token = extractHubBootstrapToken(line);
+          if (token) {
+            capturedBootstrapToken = token;
+            break;
+          }
+        }
+        if (!capturedBootstrapToken && stdoutLineBuffer) {
+          const token = extractHubBootstrapToken(stdoutLineBuffer);
+          if (token) {
+            capturedBootstrapToken = token;
+          }
+        }
+
+        if (capturedBootstrapToken) {
+          stdoutLineBuffer = '';
+          if (this.hubProcess === child) {
+            this.bootstrapToken = capturedBootstrapToken;
+          }
+          bootstrapWaiter?.();
+        }
+      };
+
+      child.stdout?.on('data', handleStdoutData);
       child.stderr?.on('data', this.captureOutput);
       // If a stream is never given a 'data' listener it must at least be
       // resumed, otherwise the same deadlock occurs.
@@ -196,6 +266,7 @@ export class AgyHubManager {
           this.vaultPath = null;
           this.currentDangerouslySkipPermissions = false;
           this.currentProxyUrl = '';
+          this.bootstrapToken = null;
         }
       });
 
@@ -219,6 +290,24 @@ export class AgyHubManager {
         throw new Error('Antigravity hub start was cancelled.');
       }
 
+      if (!capturedBootstrapToken && child.stdout) {
+        await this.waitForBootstrapToken(
+          child,
+          () => capturedBootstrapToken,
+          (cb) => {
+            bootstrapWaiter = cb;
+          },
+          BOOTSTRAP_TOKEN_WAIT_MS,
+        );
+      }
+
+      if (generation !== this.startGeneration) {
+        // stopHub ran while we were waiting for the bootstrap token; don't resurrect an orphan daemon.
+        removeHubInstanceMetadata(safeProfile);
+        AgyProcess.killProcess(child, true);
+        throw new Error('Antigravity hub start was cancelled.');
+      }
+
       this.hubProcess = child;
       this.port = port;
       this.currentProfile = safeProfile;
@@ -226,8 +315,9 @@ export class AgyHubManager {
       this.vaultPath = vaultPath;
       this.currentDangerouslySkipPermissions = dangerouslySkipPermissions;
       this.currentProxyUrl = safeProxyUrl;
+      this.bootstrapToken = capturedBootstrapToken;
 
-      return this.buildHubUrl(port, projectId);
+      return this.buildHubUrl(port, projectId, undefined, this.bootstrapToken);
     };
 
     const startPromise = (async () => {
@@ -259,10 +349,20 @@ export class AgyHubManager {
 
   getHubUrl(options?: { hostTheme?: 'dark' | 'light'; section?: string }): string {
     if (!this.port) return '';
-    return this.buildHubUrl(this.port, options?.section || this.currentProjectId, options?.hostTheme);
+    return this.buildHubUrl(
+      this.port,
+      options?.section || this.currentProjectId,
+      options?.hostTheme,
+      this.bootstrapToken,
+    );
   }
 
-  private buildHubUrl(port: number, section?: string | null, hostTheme?: 'dark' | 'light'): string {
+  private buildHubUrl(
+    port: number,
+    section?: string | null,
+    hostTheme?: 'dark' | 'light',
+    bootstrapToken?: string | null,
+  ): string {
     const params = new URLSearchParams();
     if (section) {
       params.set('section', section);
@@ -272,7 +372,8 @@ export class AgyHubManager {
     }
     params.set('useWebSocket', 'true');
     const query = params.toString();
-    return `http://127.0.0.1:${port}/${query ? `?${query}` : ''}`;
+    const hash = bootstrapToken ? `#t=${encodeURIComponent(bootstrapToken)}` : '';
+    return `http://127.0.0.1:${port}/${query ? `?${query}` : ''}${hash}`;
   }
 
   isRunning(): boolean {
@@ -333,6 +434,9 @@ export class AgyHubManager {
       this.vaultPath = null;
       this.currentDangerouslySkipPermissions = false;
       this.currentProxyUrl = '';
+      this.bootstrapToken = null;
+    } else {
+      this.bootstrapToken = null;
     }
   }
 
@@ -349,7 +453,10 @@ export class AgyHubManager {
    * can report why. Bound as a listener so each chunk is consumed promptly.
    */
   private captureOutput = (chunk: Buffer): void => {
-    const text = chunk.toString('utf8').trim();
+    const text = chunk
+      .toString('utf8')
+      .replace(/([#&]t=)([^&#\s"'<>]+)/g, '$1[REDACTED]')
+      .trim();
     if (!text) return;
 
     this.recentOutput.push(text);
@@ -357,6 +464,54 @@ export class AgyHubManager {
       this.recentOutput.splice(0, this.recentOutput.length - HUB_OUTPUT_TAIL_LINES);
     }
   };
+
+  /**
+   * Waits briefly after the HTTP port is listening for `agy --hub` to emit its
+   * `#t=<token>` startup URL on stdout, falling back cleanly on older CLI builds.
+   */
+  protected waitForBootstrapToken(
+    child: ChildProcess,
+    getToken: () => string | null,
+    registerWaiter: (cb: () => void) => void,
+    timeoutMs: number = BOOTSTRAP_TOKEN_WAIT_MS,
+  ): Promise<void> {
+    if (getToken() || child.killed || child.exitCode !== null) {
+      return Promise.resolve();
+    }
+
+    return new Promise<void>((resolve) => {
+      let settled = false;
+      let timer: number | null = null;
+
+      const finish = (): void => {
+        if (settled) return;
+        settled = true;
+        if (timer !== null) {
+          window.clearTimeout(timer);
+          timer = null;
+        }
+        if (typeof child.off === 'function') {
+          child.off('exit', finish);
+        } else if (typeof child.removeListener === 'function') {
+          child.removeListener('exit', finish);
+        }
+        resolve();
+      };
+
+      registerWaiter(() => {
+        if (getToken()) {
+          finish();
+        }
+      });
+
+      child.on('exit', finish);
+      timer = window.setTimeout(finish, timeoutMs);
+
+      if (getToken() || child.killed || child.exitCode !== null) {
+        finish();
+      }
+    });
+  }
 
   /** Recent hub output, useful for diagnosing a failed start. */
   getRecentOutput(): string {

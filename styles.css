@@ -48,7 +48,9 @@
   padding-bottom: 0;
 }
 
+.antigravity-hub-webview,
 .antigravity-hub-iframe {
+  display: flex;
   flex: 1 1 0%;
   min-height: 0;
   width: 100%;
