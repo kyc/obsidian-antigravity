@@ -96,3 +96,6 @@ CLAUDE.local.md
 
 .claude/
 .codex/
+
+# Local code review archive
+docs/CODE_REVIEW_2026-11.md
