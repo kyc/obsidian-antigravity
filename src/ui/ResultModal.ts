@@ -1,16 +1,20 @@
-import { App, Component, MarkdownRenderer, MarkdownView, Modal, Notice, Setting, normalizePath, setIcon } from 'obsidian';
+import { App, Component, MarkdownRenderer, Modal, Notice, Setting, normalizePath, setIcon } from 'obsidian';
+import { VaultContext } from '../core/VaultContext';
 import { t } from '../i18n';
 
 export class ResultModal extends Modal {
   private component: Component = new Component();
+  private vaultContext: VaultContext;
 
   constructor(
     app: App,
     private title: string,
     private content: string,
     private isUnrestricted = false,
+    vaultContext?: VaultContext,
   ) {
     super(app);
+    this.vaultContext = vaultContext ?? new VaultContext(app);
   }
 
   async onOpen(): Promise<void> {
@@ -42,18 +46,36 @@ export class ResultModal extends Modal {
     new Setting(contentEl)
       .addButton((btn) => {
         btn.setButtonText(t('resultModal.btnCopy')).onClick(async () => {
-          await navigator.clipboard.writeText(this.content);
-          new Notice(t('resultModal.noticeCopied'));
+          try {
+            await navigator.clipboard.writeText(this.content);
+            new Notice(t('resultModal.noticeCopied'));
+          } catch (err) {
+            new Notice(t('resultModal.noticeCopyFailed', { error: (err as Error).message }));
+          }
         });
       })
       .addButton((btn) => {
         btn.setButtonText(t('resultModal.btnAppend')).onClick(async () => {
-          const view = this.app.workspace.getActiveViewOfType(MarkdownView);
-          if (view && view.editor) {
-            const current = view.editor.getValue();
-            view.editor.setValue(`${current}\n\n## ${t('resultModal.resultHeader')}\n\n${this.content}\n`);
-            new Notice(t('resultModal.noticeAppended'));
-            this.close();
+          const view = this.vaultContext.resolveMarkdownView();
+          const addition = `\n\n## ${t('resultModal.resultHeader')}\n\n${this.content}\n`;
+          if (view?.editor) {
+            try {
+              const lastLine = Math.max(0, view.editor.lineCount() - 1);
+              const lastLineText = view.editor.getLine(lastLine) ?? '';
+              view.editor.replaceRange(addition, { line: lastLine, ch: lastLineText.length });
+              new Notice(t('resultModal.noticeAppended'));
+              this.close();
+            } catch (err) {
+              new Notice(t('resultModal.noticeAppendFailed', { error: (err as Error).message }));
+            }
+          } else if (view?.file) {
+            try {
+              await this.app.vault.append(view.file, addition);
+              new Notice(t('resultModal.noticeAppended'));
+              this.close();
+            } catch (err) {
+              new Notice(t('resultModal.noticeAppendFailed', { error: (err as Error).message }));
+            }
           } else {
             new Notice(t('resultModal.noticeNoActiveNote'));
           }

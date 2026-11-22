@@ -33,6 +33,10 @@ export class AgyResolver {
         this.notFoundUntil = 0;
         return trimmed;
       }
+      // Explicit configured path is invalid: never silently fall back to a stale
+      // cached binary or auto-detection.
+      this.cachedPath = null;
+      return null;
     }
 
     if (this.cachedPath && this.isExecutable(this.cachedPath)) {

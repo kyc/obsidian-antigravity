@@ -19,6 +19,7 @@ export default class AntigravityPlugin extends Plugin {
   hubManager: AgyHubManager = new AgyHubManager();
   taskRunner!: VaultTaskRunner;
   statusBar!: StatusBarItem;
+  private lastCliPath: string = DEFAULT_SETTINGS.cliPath;
 
   async onload(): Promise<void> {
     await this.loadSettings();
@@ -188,10 +189,9 @@ export default class AntigravityPlugin extends Plugin {
 
     // Defer stale hub cleanup and auto-start until workspace layout is fully ready
     this.app.workspace.onLayoutReady(() => {
-      // Clean up any stale hub instances from previous crashes or ungraceful exits
-      void this.hubManager.cleanupStaleHubs(this.settings.hubProfile || 'antigravity-obsidian');
+      const profile = this.settings.hubProfile || 'antigravity-obsidian';
 
-      // Auto-start Hub if enabled
+      // Auto-start Hub if enabled (startHub performs serialized stale cleanup internally)
       if (this.settings.autoStartHub) {
         const exec = this.resolver.resolve(this.settings.cliPath);
         const vaultPath = this.vaultContext.getVaultBasePath();
@@ -201,7 +201,7 @@ export default class AntigravityPlugin extends Plugin {
               exec,
               vaultPath,
               this.settings.hubPort,
-              this.settings.hubProfile || 'antigravity-obsidian',
+              profile,
               this.settings.defaultAgent,
               this.isHubUnrestrictedAllowed(),
               this.settings.proxyUrl,
@@ -212,12 +212,17 @@ export default class AntigravityPlugin extends Plugin {
               new Notice(t('notices.hubAutoStartFailed', { error: (err as Error).message }));
               this.statusBar.update('error', t('statusBar.hubStartFailed'));
             });
-        } else if (!exec) {
+          return;
+        }
+        if (!exec) {
           new Notice(t('notices.cliNotFound'));
         } else {
           new Notice(t('notices.vaultPathUnavailable'));
         }
       }
+
+      // Clean up any stale hub instances from previous crashes or ungraceful exits
+      void this.hubManager.cleanupStaleHubs(profile);
     });
   }
 
@@ -236,10 +241,18 @@ export default class AntigravityPlugin extends Plugin {
   async loadSettings(): Promise<void> {
     const loaded: unknown = await this.loadData();
     this.settings = validateSettings(loaded);
+    this.lastCliPath = this.settings.cliPath;
+    this.resolver.clearCache();
     setConfiguredLanguage(this.settings.language);
   }
 
   async saveSettings(): Promise<void> {
+    this.settings = validateSettings(this.settings);
+    if (this.settings.cliPath !== this.lastCliPath) {
+      this.lastCliPath = this.settings.cliPath;
+      this.resolver.clearCache();
+    }
+
     // Turning unrestricted mode off invalidates the earlier "I understand the
     // risk" acknowledgement. Without this, flipping the toggle off and back on
     // would run autonomously with no confirmation, which is not what the user
@@ -254,6 +267,32 @@ export default class AntigravityPlugin extends Plugin {
 
     await this.saveData(this.settings);
     setConfiguredLanguage(this.settings.language);
+
+    if (this.hasRunningHubConfigDrifted()) {
+      this.hubManager.stopHub();
+      this.refreshOpenHubViews();
+    }
+  }
+
+  private hasRunningHubConfigDrifted(): boolean {
+    const vaultPath = this.vaultContext?.getVaultBasePath() ?? this.hubManager.getVaultPath() ?? '';
+    return this.hubManager.hasConfigDrift({
+      profile: this.settings.hubProfile || 'antigravity-obsidian',
+      vaultPath,
+      dangerouslySkipPermissions: this.isHubUnrestrictedAllowed(),
+      proxyUrl: this.settings.proxyUrl,
+      defaultAgent: this.settings.defaultAgent,
+      preferredPort: this.settings.hubPort,
+    });
+  }
+
+  private refreshOpenHubViews(): void {
+    const leaves = this.app?.workspace?.getLeavesOfType?.(ANTIGRAVITY_HUB_VIEW_TYPE) ?? [];
+    for (const leaf of leaves) {
+      if (leaf.view instanceof HubView) {
+        leaf.view.refreshHub();
+      }
+    }
   }
 
   /**
@@ -303,6 +342,8 @@ export default class AntigravityPlugin extends Plugin {
     context: TaskContext,
     title: string,
   ): Promise<void> {
+    const isUnrestrictedRun =
+      this.settings.allowUnrestrictedTasks && this.settings.unrestrictedConfirmed;
     try {
       new Notice(t('notices.taskStarting', { title }));
       const output = await this.taskRunner.runTask(exec, {
@@ -311,7 +352,7 @@ export default class AntigravityPlugin extends Plugin {
         model: this.settings.model,
       });
 
-      new ResultModal(this.app, title, output, this.settings.allowUnrestrictedTasks).open();
+      new ResultModal(this.app, title, output, isUnrestrictedRun, this.vaultContext).open();
     } catch (err) {
       if (err instanceof TaskCancelledError) {
         return;

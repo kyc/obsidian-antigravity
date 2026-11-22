@@ -18,9 +18,12 @@ declare global {
 export class HubView extends ItemView {
   private webviewEl: ElectronWebviewElement | null = null;
   private loadingEl: HTMLElement | null = null;
+  private retryBtnEl: HTMLButtonElement | null = null;
   private container!: HTMLElement;
   private isClosed: boolean = false;
   private startupTimer: number | null = null;
+  private reloadTimer: number | null = null;
+  private hasBoundContainerClick: boolean = false;
 
   constructor(
     leaf: WorkspaceLeaf,
@@ -71,7 +74,21 @@ export class HubView extends ItemView {
       window.clearTimeout(this.startupTimer);
       this.startupTimer = null;
     }
+    this.clearReloadTimer();
     this.container = this.contentEl;
+    if (!this.hasBoundContainerClick) {
+      this.hasBoundContainerClick = true;
+      this.registerDomEvent(this.container, 'click', (evt: MouseEvent) => {
+        const target = evt.target as Node | null;
+        if (
+          this.retryBtnEl &&
+          target &&
+          (target === this.retryBtnEl || (typeof this.retryBtnEl.contains === 'function' && this.retryBtnEl.contains(target)))
+        ) {
+          void this.initHub();
+        }
+      });
+    }
     this.container.empty();
     this.container.addClass('antigravity-hub-view-container');
 
@@ -102,9 +119,18 @@ export class HubView extends ItemView {
       window.clearTimeout(this.startupTimer);
       this.startupTimer = null;
     }
+    this.clearReloadTimer();
     this.container?.empty();
     this.webviewEl = null;
     this.loadingEl = null;
+    this.retryBtnEl = null;
+  }
+
+  private clearReloadTimer(): void {
+    if (this.reloadTimer !== null) {
+      window.clearTimeout(this.reloadTimer);
+      this.reloadTimer = null;
+    }
   }
 
   private getThemedHubUrl(): string {
@@ -112,6 +138,40 @@ export class HubView extends ItemView {
       ? activeDocument.body.classList.contains('theme-dark')
       : (typeof document !== 'undefined' && document.body.classList.contains('theme-dark'));
     return this.hubManager.getHubUrl({ hostTheme: isDark ? 'dark' : 'light' });
+  }
+
+  refreshHub(): void {
+    if (!this.isClosed) {
+      void this.initHub();
+    }
+  }
+
+  private isHubConfigMatching(vaultPath: string): boolean {
+    const allowUnrestricted = this.getAllowUnrestricted ? this.getAllowUnrestricted() : false;
+    const profile = sanitizeProfile(this.getProfile());
+    const proxyUrl = (this.getProxyUrl ? this.getProxyUrl() : '').trim();
+    const defaultAgent = (this.getDefaultAgent ? this.getDefaultAgent() : '').trim();
+    const preferredPort = this.getPreferredPort();
+
+    const runningAgent =
+      typeof this.hubManager.getDefaultAgent === 'function'
+        ? this.hubManager.getDefaultAgent()
+        : undefined;
+    const runningPreferredPort =
+      typeof this.hubManager.getPreferredPort === 'function'
+        ? this.hubManager.getPreferredPort()
+        : undefined;
+
+    return (
+      this.hubManager.isRunning() &&
+      Boolean(this.hubManager.getHubUrl()) &&
+      this.hubManager.getCurrentProfile() === profile &&
+      this.hubManager.getVaultPath() === vaultPath &&
+      this.hubManager.getDangerouslySkipPermissions() === allowUnrestricted &&
+      this.hubManager.getProxyUrl() === proxyUrl &&
+      (runningAgent === undefined || runningAgent === defaultAgent) &&
+      (runningPreferredPort === undefined || runningPreferredPort === preferredPort)
+    );
   }
 
   private async initHub(): Promise<void> {
@@ -142,14 +202,7 @@ export class HubView extends ItemView {
     const profile = this.getProfile();
     const proxyUrl = this.getProxyUrl ? this.getProxyUrl() : '';
 
-    if (
-      this.hubManager.isRunning() &&
-      this.hubManager.getHubUrl() &&
-      this.hubManager.getCurrentProfile() === profile &&
-      this.hubManager.getVaultPath() === vaultPath &&
-      this.hubManager.getDangerouslySkipPermissions() === allowUnrestricted &&
-      this.hubManager.getProxyUrl() === (proxyUrl.trim() || '')
-    ) {
+    if (this.isHubConfigMatching(vaultPath)) {
       if (!this.isClosed) {
         this.renderWebview(this.getThemedHubUrl());
       }
@@ -180,6 +233,8 @@ export class HubView extends ItemView {
 
   private renderLoading(message: string): void {
     if (this.isClosed) return;
+    this.clearReloadTimer();
+    this.retryBtnEl = null;
     if (this.webviewEl) {
       this.webviewEl.remove();
       this.webviewEl = null;
@@ -196,6 +251,7 @@ export class HubView extends ItemView {
 
   private renderError(message: string): void {
     if (this.isClosed) return;
+    this.clearReloadTimer();
     if (this.webviewEl) {
       this.webviewEl.remove();
       this.webviewEl = null;
@@ -208,13 +264,13 @@ export class HubView extends ItemView {
     this.loadingEl.createEl('p', { text: `⚠️ ${message}`, cls: 'mod-warning' });
     const retryBtn = this.loadingEl.createEl('button', { text: t('hubView.retryButton') });
     retryBtn.type = 'button';
-    this.registerDomEvent(retryBtn, 'click', () => {
-      void this.initHub();
-    });
+    this.retryBtnEl = retryBtn;
   }
 
   private renderWebview(url: string): void {
     if (this.isClosed) return;
+    this.clearReloadTimer();
+    this.retryBtnEl = null;
     if (this.loadingEl) {
       this.loadingEl.remove();
       this.loadingEl = null;
@@ -240,14 +296,17 @@ export class HubView extends ItemView {
   }
 
   private reloadWebview(): void {
-    if (this.webviewEl) {
+    this.clearReloadTimer();
+    const vaultPath = this.getVaultPath();
+    if (this.webviewEl && vaultPath && this.isHubConfigMatching(vaultPath)) {
       const targetUrl = this.getThemedHubUrl();
       if (!targetUrl) {
         void this.initHub();
         return;
       }
       this.webviewEl.setAttribute('src', 'about:blank');
-      window.setTimeout(() => {
+      this.reloadTimer = window.setTimeout(() => {
+        this.reloadTimer = null;
         if (this.webviewEl && !this.isClosed) {
           this.webviewEl.setAttribute('src', targetUrl);
         }

@@ -2,6 +2,7 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { pathToFileURL } from 'url';
 
 function ensureDir(dirPath: string, mode: number = 0o700): void {
   if (!fs.existsSync(dirPath)) {
@@ -36,39 +37,64 @@ export function sanitizeProfile(profile: string): string {
   return clean || 'antigravity-obsidian';
 }
 
+function readTokenFile(filePath: string): { content: Buffer; mtimeMs: number } | null {
+  try {
+    if (!fs.existsSync(filePath)) return null;
+    const stat = fs.statSync(filePath);
+    if (!stat.isFile() || stat.size === 0) return null;
+    const content = fs.readFileSync(filePath);
+    if (content.toString('utf8').trim().length === 0) return null;
+    return { content, mtimeMs: stat.mtimeMs };
+  } catch {
+    return null;
+  }
+}
+
 export function ensureProfileAuth(profile: string, homeDir: string = os.homedir()): boolean {
   const safeProfile = sanitizeProfile(profile);
-  if (!safeProfile || safeProfile === 'antigravity-cli') {
+  if (!safeProfile) {
     return false;
   }
 
   const targetDir = path.join(homeDir, '.gemini', safeProfile);
   const targetToken = path.join(targetDir, 'antigravity-oauth-token');
+  const targetInfo = readTokenFile(targetToken);
 
-  if (fs.existsSync(targetToken)) {
-    return true;
+  if (safeProfile === 'antigravity-cli') {
+    return targetInfo !== null;
   }
 
   const candidateSources = [
     path.join(homeDir, '.gemini', 'antigravity-cli', 'antigravity-oauth-token'),
     path.join(homeDir, '.gemini', 'antigravity', 'antigravity-oauth-token'),
     path.join(homeDir, '.gemini', 'antigravity-ide', 'antigravity-oauth-token'),
-  ];
+  ].filter((src) => src !== targetToken);
 
+  let newestSource: { content: Buffer; mtimeMs: number } | null = null;
   for (const src of candidateSources) {
-    if (fs.existsSync(src)) {
-      try {
-        ensureDir(targetDir);
-        fs.copyFileSync(src, targetToken);
-        fs.chmodSync(targetToken, 0o600);
-        return true;
-      } catch {
-        return false;
-      }
+    const srcInfo = readTokenFile(src);
+    if (!srcInfo) continue;
+    if (!newestSource || srcInfo.mtimeMs > newestSource.mtimeMs) {
+      newestSource = srcInfo;
     }
   }
 
-  return false;
+  const shouldSync =
+    newestSource !== null &&
+    (targetInfo === null || newestSource.mtimeMs > targetInfo.mtimeMs);
+
+  if (shouldSync && newestSource) {
+    try {
+      ensureDir(targetDir);
+      fs.writeFileSync(targetToken, newestSource.content, { mode: 0o600 });
+      fs.chmodSync(targetToken, 0o600);
+      return true;
+    } catch {
+      return targetInfo !== null;
+    }
+  }
+
+  return targetInfo !== null;
 }
 
 export function ensureProfileOnboarding(profile: string, homeDir: string = os.homedir()): boolean {
@@ -124,11 +150,11 @@ migrations:  {
 
 /**
  * Converts a filesystem path into a valid RFC 8089 file URI (file:///...).
- * Crucial on Windows: prevents drive letters (e.g. C:) from being parsed as URL hosts.
+ * Uses Node's pathToFileURL so special characters (#, ?, %, spaces, non-ASCII)
+ * and Windows drive letters are properly encoded.
  */
 export function pathToFolderUri(filePath: string): string {
-  const resolved = path.resolve(filePath).replace(/\\/g, '/');
-  return resolved.startsWith('/') ? `file://${resolved}` : `file:///${resolved}`;
+  return pathToFileURL(path.resolve(filePath)).href;
 }
 
 export function ensureVaultProject(vaultPath: string, homeDir: string = os.homedir()): string {

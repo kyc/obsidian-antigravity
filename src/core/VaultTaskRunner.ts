@@ -77,12 +77,12 @@ export class VaultTaskRunner {
     onProgress?: (event: TaskProgressEvent) => void,
   ): Promise<string> {
     if (this.currentRun !== null) {
-      throw new Error('Another Antigravity task is already running. Please wait or cancel it.');
+      throw new Error(t('notices.taskAlreadyRunning'));
     }
 
     const vaultPath = this.vaultContext.getVaultBasePath();
     if (!vaultPath) {
-      throw new Error('Unable to determine vault base path.');
+      throw new Error(t('notices.vaultBasePathUnavailable'));
     }
 
     const settings = this.getSettings();
@@ -131,7 +131,7 @@ export class VaultTaskRunner {
     }
 
     const runId = ++this.nextRunId;
-    this.updateStatus('running', 'Initializing...');
+    this.updateStatus('running', t('notices.taskInitializing'));
 
     return new Promise<string>((resolve, reject) => {
       let accumulatedOutput = '';
@@ -179,7 +179,7 @@ export class VaultTaskRunner {
             const event = JSON.parse(trimmed) as StreamEvent;
             if (event.event === 'result' && event.result) {
               if (event.result.status === 'ERROR') {
-                terminalError = event.result.error || event.result.message || 'Antigravity execution failed';
+                terminalError = event.result.error || event.result.message || t('notices.executionFailed');
               }
               if (typeof event.result.response === 'string') {
                 resultResponse = event.result.response;
@@ -189,7 +189,7 @@ export class VaultTaskRunner {
                   .map((d) => d.display_name || d.action)
                   .filter(Boolean)
                   .join(', ');
-                const note = `\n\n> [!WARNING] Restricted Execution: Certain tool permissions were denied (${deniedList}). Enable "Allow Unrestricted Tasks" in settings if autonomous tool execution is needed.`;
+                const note = `\n\n> [!WARNING] ${t('notices.restrictedExecutionWarning', { deniedList })}`;
                 resultResponse = (resultResponse || '') + note;
               }
             }
@@ -241,7 +241,7 @@ export class VaultTaskRunner {
           reject(err);
         });
 
-        child.on('exit', (code) => {
+        child.on('close', (code) => {
           if (runRecord.isSettled) return;
           runRecord.isSettled = true;
 
@@ -255,9 +255,9 @@ export class VaultTaskRunner {
           if (runRecord.isAborted) {
             if (isCurrent) {
               this.currentRun = null;
-              this.updateStatus('idle', 'Task cancelled');
+              this.updateStatus('idle', t('notices.taskCancelledStatus'));
             }
-            reject(new TaskCancelledError('Antigravity task was cancelled.'));
+            reject(new TaskCancelledError(t('notices.taskCancelledError')));
             return;
           }
 
@@ -410,7 +410,10 @@ export class VaultTaskRunner {
       if (update.step_type === 'tool') {
         const toolInfo = update.tool_info;
         const toolName = update.tool_name || toolInfo?.name || 'tool';
-        const actionDesc = update.state === 'DONE' ? `Finished ${toolName}` : `Running ${toolName}`;
+        const actionDesc =
+          update.state === 'DONE'
+            ? t('notices.toolFinished', { toolName })
+            : t('notices.toolRunning', { toolName });
         emit({ type: 'tool', message: `[${toolName}] ${actionDesc}` });
         return;
       }

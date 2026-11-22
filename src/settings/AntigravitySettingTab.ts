@@ -1,7 +1,7 @@
 import { App, Notice, PluginSettingTab, SettingDefinitionItem } from 'obsidian';
 import { AgyResolver } from '../core/AgyResolver';
 import { t } from '../i18n';
-import { DEFAULT_SETTINGS } from '../types';
+import { DEFAULT_SETTINGS, validateSettings } from '../types';
 import type AntigravityPlugin from '../main';
 
 export class AntigravitySettingTab extends PluginSettingTab {
@@ -18,7 +18,13 @@ export class AntigravitySettingTab extends PluginSettingTab {
   }
 
   override async setControlValue(key: string, value: unknown): Promise<void> {
-    (this.plugin.settings as unknown as Record<string, unknown>)[key] = value;
+    this.plugin.settings = validateSettings({
+      ...this.plugin.settings,
+      [key]: value,
+    });
+    if (key === 'cliPath') {
+      this.resolver.clearCache();
+    }
     await this.plugin.saveSettings();
     if (key === 'language' && typeof this.update === 'function') {
       this.update();
@@ -100,7 +106,7 @@ export class AntigravitySettingTab extends PluginSettingTab {
         control: {
           type: 'text',
           key: 'defaultAgent',
-          placeholder: DEFAULT_SETTINGS.defaultAgent,
+          placeholder: t('settings.agentPlaceholder'),
         },
       },
       {

@@ -81,6 +81,27 @@ export class VaultContext {
     };
   }
 
+  private getRelativeInsideVault(normalizedVault: string, candidatePath: string): string | null {
+    const rel = path.relative(normalizedVault, candidatePath);
+    if (rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) {
+      return null;
+    }
+    return rel;
+  }
+
+  private static buildMarkdownFence(content: string): string {
+    let maxRun = 0;
+    const matches = content.match(/`+/g);
+    if (matches) {
+      for (const run of matches) {
+        if (run.length > maxRun) {
+          maxRun = run.length;
+        }
+      }
+    }
+    return '`'.repeat(Math.max(3, maxRun + 1));
+  }
+
   resolveSafeRulesPath(rulesRelPath: string): string | null {
     const vaultPath = this.getVaultBasePath();
     if (!vaultPath) return null;
@@ -91,8 +112,9 @@ export class VaultContext {
     const normalizedVault = path.resolve(vaultPath);
     const resolvedPath = path.resolve(normalizedVault, trimmed);
 
-    // Verify resolved path is strictly within the vault directory
-    if (resolvedPath !== normalizedVault && resolvedPath.startsWith(normalizedVault + path.sep)) {
+    // Verify resolved path is strictly within the vault directory (works even at drive/fs roots)
+    const rel = this.getRelativeInsideVault(normalizedVault, resolvedPath);
+    if (rel !== null && rel.length > 0) {
       return resolvedPath;
     }
 
@@ -141,8 +163,9 @@ Adhere to the following conventions:
     const normalizedVault = path.resolve(vaultPath);
     const resolved = path.resolve(normalizedVault, trimmed);
 
-    if (resolved === normalizedVault || resolved.startsWith(normalizedVault + path.sep)) {
-      return path.relative(normalizedVault, resolved).replace(/\\/g, '/');
+    const rel = this.getRelativeInsideVault(normalizedVault, resolved);
+    if (rel !== null) {
+      return rel.replace(/\\/g, '/');
     }
 
     return path.basename(trimmed);
@@ -153,8 +176,9 @@ Adhere to the following conventions:
 
     if (context.scope === 'selection' && context.selectionText) {
       const safePath = context.filePath ? this.sanitizeContextPath(context.filePath) : 'Active Note';
+      const fence = VaultContext.buildMarkdownFence(context.selectionText);
       parts.push(`Target File: ${safePath}`);
-      parts.push(`Selected Text:\n\`\`\`markdown\n${context.selectionText}\n\`\`\``);
+      parts.push(`Selected Text:\n${fence}markdown\n${context.selectionText}\n${fence}`);
       parts.push(`Task Instruction: ${prompt}`);
     } else if (context.scope === 'active-note' && context.filePath) {
       const safePath = this.sanitizeContextPath(context.filePath);

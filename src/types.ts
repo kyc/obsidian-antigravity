@@ -26,7 +26,7 @@ export const DEFAULT_SETTINGS: AntigravityPluginSettings = {
   hubPort: 0,
   autoStartHub: false,
   hubProfile: 'antigravity-obsidian',
-  defaultAgent: 'omarchy-vault',
+  defaultAgent: '',
   enableVaultRules: true,
   customRulesPath: 'AGENTS.md',
   allowUnrestrictedTasks: false,

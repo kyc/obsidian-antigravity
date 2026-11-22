@@ -263,7 +263,11 @@ export class AgyProcess {
    */
   static killProcess(child: ChildProcess | null, killProcessGroup = false): KillEscalation {
     const noop: KillEscalation = { cancel: () => {} };
-    if (!child || child.killed) return noop;
+    if (!child) return noop;
+    const hasExited = (): boolean =>
+      (child.exitCode !== null && child.exitCode !== undefined) ||
+      (child.signalCode !== null && child.signalCode !== undefined);
+    if (hasExited() || child.killed) return noop;
 
     const pid = child.pid;
     const useGroup = Boolean(killProcessGroup && pid && process.platform !== 'win32');
@@ -283,28 +287,62 @@ export class AgyProcess {
       }
     };
 
+    let exited = false;
+    let timer: number | null = null;
+
+    const detachExitListener = () => {
+      if (typeof child.off === 'function') {
+        child.off('exit', onExit);
+      } else if (typeof child.removeListener === 'function') {
+        child.removeListener('exit', onExit);
+      }
+    };
+
+    const cancel = () => {
+      if (timer !== null) {
+        window.clearTimeout(timer);
+        timer = null;
+      }
+      detachExitListener();
+    };
+
+    const onExit = () => {
+      exited = true;
+      cancel();
+    };
+
+    if (typeof child.once === 'function') {
+      child.once('exit', onExit);
+    }
+
     try {
       sendSignal('SIGTERM');
     } catch {
+      detachExitListener();
       return noop;
     }
 
-    const timer = window.setTimeout(() => {
-      if (!child.killed) {
+    if (exited || hasExited()) {
+      detachExitListener();
+      return noop;
+    }
+
+    timer = window.setTimeout(() => {
+      timer = null;
+      detachExitListener();
+      if (!exited && !hasExited()) {
         sendSignal('SIGKILL');
       }
     }, 2000);
 
     // The escalation is a best-effort backstop, so it must never keep the host
-    // process alive on its own account.
-    if (typeof timer === 'object' && timer !== null && 'unref' in timer) {
-      (timer as { unref: () => void }).unref();
+    // process alive on its own account (relevant in Node/Jest runtimes where
+    // setTimeout returns a Timeout object with unref()).
+    const maybeNodeTimer: unknown = timer;
+    if (typeof maybeNodeTimer === 'object' && maybeNodeTimer !== null && 'unref' in maybeNodeTimer) {
+      (maybeNodeTimer as { unref: () => void }).unref();
     }
 
-    return {
-      cancel: () => {
-        window.clearTimeout(timer);
-      },
-    };
+    return { cancel };
   }
 }

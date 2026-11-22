@@ -20,7 +20,18 @@ interface InFlightHubStart {
   vaultPath: string;
   dangerouslySkipPermissions: boolean;
   proxyUrl: string;
+  defaultAgent: string;
+  preferredPort: number;
   promise: Promise<string>;
+}
+
+export interface HubRunningConfig {
+  profile: string;
+  vaultPath: string;
+  dangerouslySkipPermissions: boolean;
+  proxyUrl?: string;
+  defaultAgent?: string;
+  preferredPort?: number;
 }
 
 /** How many trailing hub output chunks to retain for diagnostics. */
@@ -77,7 +88,10 @@ export class AgyHubManager {
   private currentProjectId: string | null = null;
   private currentDangerouslySkipPermissions: boolean = false;
   private currentProxyUrl: string = '';
+  private currentDefaultAgent: string = '';
+  private currentPreferredPort: number = 0;
   private bootstrapToken: string | null = null;
+  private spawningPid: number | null = null;
   private inFlightStart: InFlightHubStart | null = null;
   private startMutex: Promise<void> = Promise.resolve();
   private killEscalation: KillEscalation | null = null;
@@ -96,16 +110,18 @@ export class AgyHubManager {
   ): Promise<string> {
     const safeProfile = sanitizeProfile(profile);
     const safeProxyUrl = proxyUrl?.trim() || '';
+    const safeAgent = defaultAgent?.trim() || '';
+    const targetConfig: HubRunningConfig = {
+      profile: safeProfile,
+      vaultPath,
+      dangerouslySkipPermissions,
+      proxyUrl: safeProxyUrl,
+      defaultAgent: safeAgent,
+      preferredPort,
+    };
 
     // 1. Fast path: if hub is already running for the exact same profile, vault & permission mode
-    if (
-      this.isRunning() &&
-      this.port &&
-      this.currentProfile === safeProfile &&
-      this.vaultPath === vaultPath &&
-      this.currentDangerouslySkipPermissions === dangerouslySkipPermissions &&
-      this.currentProxyUrl === safeProxyUrl
-    ) {
+    if (this.matchesRunningConfig(targetConfig)) {
       return this.getHubUrl();
     }
 
@@ -115,7 +131,9 @@ export class AgyHubManager {
       this.inFlightStart.profile === safeProfile &&
       this.inFlightStart.vaultPath === vaultPath &&
       this.inFlightStart.dangerouslySkipPermissions === dangerouslySkipPermissions &&
-      this.inFlightStart.proxyUrl === safeProxyUrl
+      this.inFlightStart.proxyUrl === safeProxyUrl &&
+      this.inFlightStart.defaultAgent === safeAgent &&
+      this.inFlightStart.preferredPort === preferredPort
     ) {
       return this.inFlightStart.promise;
     }
@@ -123,37 +141,33 @@ export class AgyHubManager {
     // 3. Serialize starts across differing profiles, vaults or permission modes via mutex
     const runStart = async (): Promise<string> => {
       // Re-check running state after acquiring lock
-      if (
-        this.isRunning() &&
-        this.port &&
-        this.currentProfile === safeProfile &&
-        this.vaultPath === vaultPath &&
-        this.currentDangerouslySkipPermissions === dangerouslySkipPermissions &&
-        this.currentProxyUrl === safeProxyUrl
-      ) {
+      if (this.matchesRunningConfig(targetConfig)) {
         return this.getHubUrl();
       }
 
-      // If a hub is running with a different profile, vault, permission mode, or proxy, stop it now
-      if (
-        this.hubProcess &&
-        (this.currentProfile !== safeProfile ||
-          this.vaultPath !== vaultPath ||
-          this.currentDangerouslySkipPermissions !== dangerouslySkipPermissions ||
-          this.currentProxyUrl !== safeProxyUrl)
-      ) {
+      // If a hub is running with a different profile, vault, permission mode, proxy, agent, or port, stop it now
+      if (this.hubProcess && !this.matchesRunningConfig(targetConfig)) {
         this.stopHub();
       }
       const generation = this.startGeneration;
 
       // Terminate any stale/orphan hub processes for this profile from previous sessions or crashes
-      await this.cleanupStaleHubs(safeProfile);
+      await this.performCleanupStaleHubs(safeProfile);
+
+      if (generation !== this.startGeneration) {
+        throw new Error('Antigravity hub start was cancelled.');
+      }
 
       if (preferredPort > 0) {
         // Otherwise waitForPort would accept whatever server already owns the port.
         await this.assertPortAvailable(preferredPort);
       }
       const port = preferredPort > 0 ? preferredPort : await this.getFreePort();
+
+      if (generation !== this.startGeneration) {
+        throw new Error('Antigravity hub start was cancelled.');
+      }
+
       const projectId = ensureVaultProject(vaultPath);
       ensureDefaultProjectId(safeProfile, projectId);
       const isAuthed = ensureProfileInitialized(safeProfile, vaultPath);
@@ -173,8 +187,8 @@ export class AgyHubManager {
         args.push('--dangerously-skip-permissions');
       }
 
-      if (defaultAgent) {
-        args.push(`--agent=${defaultAgent}`);
+      if (safeAgent) {
+        args.push(`--agent=${safeAgent}`);
       }
 
       const proxyEnv = AgyProcess.formatProxyEnv(safeProxyUrl);
@@ -191,6 +205,8 @@ export class AgyHubManager {
         stdio: ['ignore', 'pipe', 'pipe'],
         detached: process.platform !== 'win32',
       });
+
+      this.spawningPid = child.pid ?? null;
 
       if (child.pid) {
         saveHubInstanceMetadata(safeProfile, {
@@ -266,58 +282,68 @@ export class AgyHubManager {
           this.vaultPath = null;
           this.currentDangerouslySkipPermissions = false;
           this.currentProxyUrl = '';
+          this.currentDefaultAgent = '';
+          this.currentPreferredPort = 0;
           this.bootstrapToken = null;
         }
       });
 
-      // Wait until server starts accepting connections
       try {
-        await this.waitForPort({ port, child, timeoutMs: 15000 });
-      } catch (err) {
-        const detail = this.getRecentOutput();
-        removeHubInstanceMetadata(safeProfile);
-        AgyProcess.killProcess(child, true);
-        this.recentOutput = [];
+        // Wait until server starts accepting connections
+        try {
+          await this.waitForPort({ port, child, timeoutMs: 15000 });
+        } catch (err) {
+          const detail = this.getRecentOutput();
+          removeHubInstanceMetadata(safeProfile);
+          AgyProcess.killProcess(child, true);
+          this.recentOutput = [];
 
-        const message = (err as Error).message;
-        throw new Error(detail ? `${message}\n${detail}` : message);
+          const message = (err as Error).message;
+          throw new Error(detail ? `${message}\n${detail}` : message);
+        }
+
+        if (generation !== this.startGeneration) {
+          // stopHub ran while we were waiting; don't resurrect an orphan daemon.
+          removeHubInstanceMetadata(safeProfile);
+          AgyProcess.killProcess(child, true);
+          throw new Error('Antigravity hub start was cancelled.');
+        }
+
+        if (!capturedBootstrapToken && child.stdout) {
+          await this.waitForBootstrapToken(
+            child,
+            () => capturedBootstrapToken,
+            (cb) => {
+              bootstrapWaiter = cb;
+            },
+            BOOTSTRAP_TOKEN_WAIT_MS,
+          );
+        }
+
+        if (generation !== this.startGeneration) {
+          // stopHub ran while we were waiting for the bootstrap token; don't resurrect an orphan daemon.
+          removeHubInstanceMetadata(safeProfile);
+          AgyProcess.killProcess(child, true);
+          throw new Error('Antigravity hub start was cancelled.');
+        }
+
+        this.hubProcess = child;
+        this.port = port;
+        this.currentProfile = safeProfile;
+        this.currentProjectId = projectId;
+        this.vaultPath = vaultPath;
+        this.currentDangerouslySkipPermissions = dangerouslySkipPermissions;
+        this.currentProxyUrl = safeProxyUrl;
+        this.currentDefaultAgent = safeAgent;
+        this.currentPreferredPort = preferredPort;
+        this.bootstrapToken = capturedBootstrapToken;
+
+        return this.buildHubUrl(port, projectId, undefined, this.bootstrapToken);
+      } finally {
+        if (this.spawningPid === (child.pid ?? null)) {
+          this.spawningPid = null;
+        }
       }
-
-      if (generation !== this.startGeneration) {
-        // stopHub ran while we were waiting; don't resurrect an orphan daemon.
-        removeHubInstanceMetadata(safeProfile);
-        AgyProcess.killProcess(child, true);
-        throw new Error('Antigravity hub start was cancelled.');
-      }
-
-      if (!capturedBootstrapToken && child.stdout) {
-        await this.waitForBootstrapToken(
-          child,
-          () => capturedBootstrapToken,
-          (cb) => {
-            bootstrapWaiter = cb;
-          },
-          BOOTSTRAP_TOKEN_WAIT_MS,
-        );
-      }
-
-      if (generation !== this.startGeneration) {
-        // stopHub ran while we were waiting for the bootstrap token; don't resurrect an orphan daemon.
-        removeHubInstanceMetadata(safeProfile);
-        AgyProcess.killProcess(child, true);
-        throw new Error('Antigravity hub start was cancelled.');
-      }
-
-      this.hubProcess = child;
-      this.port = port;
-      this.currentProfile = safeProfile;
-      this.currentProjectId = projectId;
-      this.vaultPath = vaultPath;
-      this.currentDangerouslySkipPermissions = dangerouslySkipPermissions;
-      this.currentProxyUrl = safeProxyUrl;
-      this.bootstrapToken = capturedBootstrapToken;
-
-      return this.buildHubUrl(port, projectId, undefined, this.bootstrapToken);
     };
 
     const startPromise = (async () => {
@@ -335,6 +361,8 @@ export class AgyHubManager {
       vaultPath,
       dangerouslySkipPermissions,
       proxyUrl: safeProxyUrl,
+      defaultAgent: safeAgent,
+      preferredPort,
       promise: startPromise,
     };
 
@@ -396,36 +424,109 @@ export class AgyHubManager {
     return this.currentProxyUrl;
   }
 
+  getDefaultAgent(): string {
+    return this.currentDefaultAgent;
+  }
+
+  getPreferredPort(): number {
+    return this.currentPreferredPort;
+  }
+
+  matchesRunningConfig(config: HubRunningConfig): boolean {
+    const safeProfile = sanitizeProfile(config.profile);
+    const safeProxyUrl = config.proxyUrl?.trim() || '';
+    const safeAgent = config.defaultAgent?.trim() || '';
+    const preferredPort = config.preferredPort ?? 0;
+
+    return (
+      this.isRunning() &&
+      this.port !== null &&
+      this.currentProfile === safeProfile &&
+      this.vaultPath === config.vaultPath &&
+      this.currentDangerouslySkipPermissions === config.dangerouslySkipPermissions &&
+      this.currentProxyUrl === safeProxyUrl &&
+      this.currentDefaultAgent === safeAgent &&
+      this.currentPreferredPort === preferredPort &&
+      (preferredPort <= 0 || this.port === preferredPort)
+    );
+  }
+
+  hasConfigDrift(config: HubRunningConfig): boolean {
+    if (this.isRunning()) {
+      return !this.matchesRunningConfig(config);
+    }
+    if (this.inFlightStart) {
+      const safeProfile = sanitizeProfile(config.profile);
+      const safeProxyUrl = config.proxyUrl?.trim() || '';
+      const safeAgent = config.defaultAgent?.trim() || '';
+      const preferredPort = config.preferredPort ?? 0;
+      return (
+        this.inFlightStart.profile !== safeProfile ||
+        this.inFlightStart.vaultPath !== config.vaultPath ||
+        this.inFlightStart.dangerouslySkipPermissions !== config.dangerouslySkipPermissions ||
+        this.inFlightStart.proxyUrl !== safeProxyUrl ||
+        this.inFlightStart.defaultAgent !== safeAgent ||
+        this.inFlightStart.preferredPort !== preferredPort
+      );
+    }
+    return false;
+  }
+
+  private isManagedPid(pid: number): boolean {
+    return pid === this.hubProcess?.pid || pid === this.spawningPid;
+  }
+
   /**
    * Discovers and cleans up stale/orphaned hub processes for this profile from previous sessions.
+   * Serialized with startHub via startMutex so cleanup cannot race with and kill a newly spawned hub.
    */
-  async cleanupStaleHubs(profile: string, homeDir: string = os.homedir()): Promise<void> {
-    const safeProfile = sanitizeProfile(profile);
-    const currentChildPid = this.hubProcess?.pid;
+  cleanupStaleHubs(profile: string, homeDir: string = os.homedir()): Promise<void> {
+    const cleanupPromise = (async () => {
+      await this.startMutex;
+      await this.performCleanupStaleHubs(profile, homeDir);
+    })();
 
-    // 1. Check tracked instance file
+    this.startMutex = cleanupPromise.then(
+      () => {},
+      () => {},
+    );
+
+    return cleanupPromise;
+  }
+
+  private async performCleanupStaleHubs(profile: string, homeDir: string = os.homedir()): Promise<void> {
+    const safeProfile = sanitizeProfile(profile);
+    const verifiedPids = AgyProcess.findAgyHubProcesses(safeProfile);
+    const terminatedPids = new Set<number>();
+
+    // 1. Check tracked instance file — on POSIX, verify PID identity before signalling
+    // to avoid killing an unrelated process that recycled a stale PID after reboot/crash.
     const meta = loadHubInstanceMetadata(safeProfile, homeDir);
-    if (meta && meta.pid && meta.pid !== currentChildPid) {
-      await AgyProcess.terminatePid(meta.pid, true);
+    if (meta && meta.pid && !this.isManagedPid(meta.pid)) {
+      const isVerified = process.platform === 'win32' || verifiedPids.includes(meta.pid);
+      if (isVerified) {
+        await AgyProcess.terminatePid(meta.pid, true);
+        terminatedPids.add(meta.pid);
+      }
       removeHubInstanceMetadata(safeProfile, homeDir);
     }
 
-    // 2. Scan for any orphaned agy --hub processes matching this profile
-    const orphanPids = AgyProcess.findAgyHubProcesses(safeProfile);
-    for (const pid of orphanPids) {
-      if (pid !== currentChildPid) {
+    // 2. Scan for any remaining orphaned agy --hub processes matching this profile
+    for (const pid of verifiedPids) {
+      if (!terminatedPids.has(pid) && !this.isManagedPid(pid)) {
         await AgyProcess.terminatePid(pid, true);
+        terminatedPids.add(pid);
       }
     }
   }
 
   stopHub(): void {
     this.startGeneration++;
-    this.clearKillEscalation();
     if (this.currentProfile) {
       removeHubInstanceMetadata(this.currentProfile);
     }
     if (this.hubProcess) {
+      this.clearKillEscalation();
       this.killEscalation = AgyProcess.killProcess(this.hubProcess, true);
       this.hubProcess = null;
       this.port = null;
@@ -434,6 +535,8 @@ export class AgyHubManager {
       this.vaultPath = null;
       this.currentDangerouslySkipPermissions = false;
       this.currentProxyUrl = '';
+      this.currentDefaultAgent = '';
+      this.currentPreferredPort = 0;
       this.bootstrapToken = null;
     } else {
       this.bootstrapToken = null;
