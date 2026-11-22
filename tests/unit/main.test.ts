@@ -24,8 +24,9 @@ describe('AntigravityPlugin lifecycle and settings synchronization', () => {
     jest.restoreAllMocks();
   });
 
-  describe('saveSettings hub drift handling (#1.4)', () => {
+  describe('saveSettings hub drift handling', () => {
     function simulateRunningHub(overrides?: {
+      executable?: string;
       profile?: string;
       vaultPath?: string;
       dangerouslySkipPermissions?: boolean;
@@ -37,6 +38,7 @@ describe('AntigravityPlugin lifecycle and settings synchronization', () => {
       const mgr = plugin.hubManager as any;
       mgr.hubProcess = { pid: 9001, killed: false, exitCode: null, kill: jest.fn() };
       mgr.port = overrides?.port ?? 42000;
+      mgr.currentExecutable = overrides?.executable ?? '/bin/agy';
       mgr.currentProfile = overrides?.profile ?? 'antigravity-obsidian';
       mgr.vaultPath = overrides?.vaultPath ?? '/mock/vault/path';
       mgr.currentDangerouslySkipPermissions = overrides?.dangerouslySkipPermissions ?? false;
@@ -106,7 +108,8 @@ describe('AntigravityPlugin lifecycle and settings synchronization', () => {
     });
 
     it('does not stop hub when non-hub settings like model change', async () => {
-      simulateRunningHub();
+      jest.spyOn(plugin.resolver, 'resolve').mockReturnValue('/bin/agy');
+      simulateRunningHub({ executable: '/bin/agy' });
 
       const stopSpy = jest.spyOn(plugin.hubManager, 'stopHub');
       plugin.settings.model = 'claude-sonnet-4-6';
@@ -115,7 +118,76 @@ describe('AntigravityPlugin lifecycle and settings synchronization', () => {
       expect(stopSpy).not.toHaveBeenCalled();
     });
 
-    it('normalizes invalid settings and clears resolver cache when cliPath changes in saveSettings (#2.1)', async () => {
+    it('stops and refreshes running hub when cliPath resolves to a different executable', async () => {
+      jest.spyOn(plugin.resolver, 'resolve').mockImplementation((configured) => configured || '/bin/agy');
+      simulateRunningHub({ executable: '/bin/agy' });
+
+      const hubView = new HubView(
+        { app } as unknown as WorkspaceLeaf,
+        plugin.hubManager,
+        () => plugin.resolver.resolve(plugin.settings.cliPath),
+        () => '/mock/vault/path',
+        () => plugin.settings.hubPort,
+        () => plugin.settings.hubProfile,
+      );
+      const refreshSpy = jest.spyOn(hubView, 'refreshHub').mockImplementation(() => {});
+      app.workspace.getLeavesOfType = jest.fn().mockReturnValue([{ view: hubView }]);
+      const stopSpy = jest.spyOn(plugin.hubManager, 'stopHub');
+
+      plugin.settings.cliPath = '/opt/agy-v2/agy';
+      await plugin.saveSettings();
+
+      expect(stopSpy).toHaveBeenCalledTimes(1);
+      expect(refreshSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('debounces hub restart when debounceHubRestart option is set and cancels pending timer on unload', async () => {
+      jest.useFakeTimers();
+      try {
+        jest.spyOn(plugin.resolver, 'resolve').mockReturnValue('/bin/agy');
+        simulateRunningHub({ executable: '/bin/agy', proxyUrl: '' });
+
+        const hubView = new HubView(
+          { app } as unknown as WorkspaceLeaf,
+          plugin.hubManager,
+          () => '/bin/agy',
+          () => '/mock/vault/path',
+          () => plugin.settings.hubPort,
+          () => plugin.settings.hubProfile,
+        );
+        const refreshSpy = jest.spyOn(hubView, 'refreshHub').mockImplementation(() => {});
+        app.workspace.getLeavesOfType = jest.fn().mockReturnValue([{ view: hubView }]);
+        const stopSpy = jest.spyOn(plugin.hubManager, 'stopHub');
+
+        plugin.settings.proxyUrl = 'http://127.0.0.1:789';
+        await plugin.saveSettings({ debounceHubRestart: true });
+        plugin.settings.proxyUrl = 'http://127.0.0.1:7897';
+        await plugin.saveSettings({ debounceHubRestart: true });
+
+        expect(stopSpy).not.toHaveBeenCalled();
+        expect(refreshSpy).not.toHaveBeenCalled();
+
+        jest.advanceTimersByTime(400);
+        expect(stopSpy).toHaveBeenCalledTimes(1);
+        expect(refreshSpy).toHaveBeenCalledTimes(1);
+
+        // Schedule another debounced restart, then unload before it fires
+        simulateRunningHub({ executable: '/bin/agy', proxyUrl: 'http://127.0.0.1:7897' });
+        stopSpy.mockClear();
+        refreshSpy.mockClear();
+
+        plugin.settings.proxyUrl = 'http://127.0.0.1:8080';
+        await plugin.saveSettings({ debounceHubRestart: true });
+        plugin.onunload();
+
+        jest.advanceTimersByTime(500);
+        expect(refreshSpy).not.toHaveBeenCalled();
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('normalizes invalid settings and clears resolver cache when cliPath changes in saveSettings', async () => {
       const clearSpy = jest.spyOn(plugin.resolver, 'clearCache');
 
       plugin.settings.hubPort = 99999;
@@ -134,7 +206,7 @@ describe('AntigravityPlugin lifecycle and settings synchronization', () => {
     });
   });
 
-  describe('onLayoutReady auto-start vs stale cleanup serialization (#1.2)', () => {
+  describe('onLayoutReady auto-start vs stale cleanup serialization', () => {
     it('does not invoke standalone cleanupStaleHubs concurrently when autoStartHub starts the hub', async () => {
       let layoutCb: (() => void) | null = null;
       app.workspace.onLayoutReady = jest.fn().mockImplementation((cb: () => void) => {

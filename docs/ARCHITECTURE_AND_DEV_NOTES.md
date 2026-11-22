@@ -69,8 +69,8 @@ flowchart TD
 ### 3.2 并发防抖与跨 Profile 启动锁 (`inFlightStart` & `startMutex`)
 - **踩坑现象**：多标签页或快速重连并发调用 `startHub` 时，可能出现进程竞争、端口冲突、旧进程被杀或启动期陈旧实例清理误杀刚拉起的新 Hub。
 - **解决方案**：
-  1. 相同配置（Profile / Vault / 权限模式 / 代理 / Agent / 指定端口）的并发请求通过 `inFlightStart` 合并，共享同一个 Promise；
-  2. 跨配置切换与 `cleanupStaleHubs()` 统一由 `startMutex` 全局互斥锁串行化调度，锁内重新校验运行态与 `startGeneration`，并在 `spawn()` 前复检取消标记，同时跟踪 `spawningPid` 防止清理流程误杀启动中的子进程；
+  1. 相同配置（可执行文件路径 / Profile / Vault / 权限模式 / 代理 / Agent / 指定端口）的并发请求通过 `inFlightStart` 合并，共享同一个 Promise；
+  2. 跨配置切换与 `cleanupStaleHubs()` 统一由 `startMutex` 全局互斥锁串行化调度，锁内重新校验运行态与 `startGeneration`，并在 `spawn()` 前复检取消标记；同时跟踪 `spawningProcess` 防止清理流程误杀启动中的子进程，并允许 `stopHub()` 在 `waitForPort` 期间立即终止子进程并中断轮询；
   3. POSIX 平台在终止 `hub-instance.json` 记录的历史 PID 前，先通过 `/proc` / `ps` 校验其确实为目标 Profile 的 `agy --hub` 进程，避免 PID 复用误杀无关进程；
   4. `AgyProcess.killProcess` 基于 `exitCode`/`signalCode` 与 `once('exit')` 判定存活并在 2s 后升级 `SIGKILL`；`stopHub()` 仅在接管新进程终止时重置兜底定时器，避免卸载期幂等重复调用提前取消升级。
 
@@ -128,7 +128,7 @@ LLM 在响应时会由底层到表层合并以下上下文：
 3. **Agent 人设层**：在设置中配置自定义 Agent 后通过 `--agent` 注入（默认留空不传 `--agent`）。
 
 ### 4.4 严格运行时配置校验 (`validateSettings`)
-- 在 [src/types.ts](../src/types.ts) 中实现严格的纯函数校验，防止外部手动编辑 `data.json` 引入畸形类型（如字符串端口、非枚举 `effort`、带路径遍历的 `hubProfile`），保证所有运行时属性的绝对类型安全与边界兜底。
+- 在 [src/types.ts](../src/types.ts) 中实现严格的纯函数校验，防止外部手动编辑 `data.json` 引入畸形类型（如字符串端口、非枚举 `language`、带路径遍历的 `hubProfile`），保证所有运行时属性的绝对类型安全与边界兜底。
 
 ---
 

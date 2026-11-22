@@ -208,8 +208,20 @@ describe('AntigravitySettingTab', () => {
     await tab.setControlValue('cliPath', '');
     expect(clearSpy).toHaveBeenCalledTimes(2);
     expect(mockPlugin.settings.cliPath).toBe('');
+    expect(mockPlugin.saveSettings).toHaveBeenCalledWith({ debounceHubRestart: true });
 
     clearSpy.mockRestore();
+  });
+
+  it('debounces hub restart for text/number hub settings but applies permission toggle immediately', async () => {
+    await tab.setControlValue('proxyUrl', 'http://127.0.0.1:7897');
+    expect(mockPlugin.saveSettings).toHaveBeenLastCalledWith({ debounceHubRestart: true });
+
+    await tab.setControlValue('hubProfile', 'custom-profile');
+    expect(mockPlugin.saveSettings).toHaveBeenLastCalledWith({ debounceHubRestart: true });
+
+    await tab.setControlValue('allowUnrestrictedTasks', false);
+    expect(mockPlugin.saveSettings).toHaveBeenLastCalledWith();
   });
 });
 

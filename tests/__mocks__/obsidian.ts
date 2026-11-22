@@ -163,6 +163,7 @@ export class ItemView {
 
   addAction = jest.fn();
   onload(): void {}
+  onunload(): void {}
   registerDomEvent = jest.fn();
 
   getViewType(): string {

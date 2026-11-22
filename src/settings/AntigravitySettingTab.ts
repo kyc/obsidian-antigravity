@@ -4,6 +4,14 @@ import { t } from '../i18n';
 import { DEFAULT_SETTINGS, validateSettings } from '../types';
 import type AntigravityPlugin from '../main';
 
+const DEBOUNCED_HUB_SETTING_KEYS = new Set([
+  'cliPath',
+  'proxyUrl',
+  'defaultAgent',
+  'hubProfile',
+  'hubPort',
+]);
+
 export class AntigravitySettingTab extends PluginSettingTab {
   constructor(
     app: App,
@@ -25,7 +33,11 @@ export class AntigravitySettingTab extends PluginSettingTab {
     if (key === 'cliPath') {
       this.resolver.clearCache();
     }
-    await this.plugin.saveSettings();
+    if (DEBOUNCED_HUB_SETTING_KEYS.has(key)) {
+      await this.plugin.saveSettings({ debounceHubRestart: true });
+    } else {
+      await this.plugin.saveSettings();
+    }
     if (key === 'language' && typeof this.update === 'function') {
       this.update();
     }

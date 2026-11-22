@@ -23,7 +23,7 @@ export class HubView extends ItemView {
   private isClosed: boolean = false;
   private startupTimer: number | null = null;
   private reloadTimer: number | null = null;
-  private hasBoundContainerClick: boolean = false;
+  private clickBoundContainer: HTMLElement | null = null;
 
   constructor(
     leaf: WorkspaceLeaf,
@@ -76,8 +76,8 @@ export class HubView extends ItemView {
     }
     this.clearReloadTimer();
     this.container = this.contentEl;
-    if (!this.hasBoundContainerClick) {
-      this.hasBoundContainerClick = true;
+    if (this.clickBoundContainer !== this.container) {
+      this.clickBoundContainer = this.container;
       this.registerDomEvent(this.container, 'click', (evt: MouseEvent) => {
         const target = evt.target as Node | null;
         if (
@@ -126,6 +126,11 @@ export class HubView extends ItemView {
     this.retryBtnEl = null;
   }
 
+  onunload(): void {
+    this.clickBoundContainer = null;
+    super.onunload();
+  }
+
   private clearReloadTimer(): void {
     if (this.reloadTimer !== null) {
       window.clearTimeout(this.reloadTimer);
@@ -146,31 +151,24 @@ export class HubView extends ItemView {
     }
   }
 
-  private isHubConfigMatching(vaultPath: string): boolean {
+  private isHubConfigMatching(vaultPath: string, executable?: string | null): boolean {
     const allowUnrestricted = this.getAllowUnrestricted ? this.getAllowUnrestricted() : false;
-    const profile = sanitizeProfile(this.getProfile());
-    const proxyUrl = (this.getProxyUrl ? this.getProxyUrl() : '').trim();
-    const defaultAgent = (this.getDefaultAgent ? this.getDefaultAgent() : '').trim();
+    const profile = this.getProfile();
+    const proxyUrl = this.getProxyUrl ? this.getProxyUrl() : '';
+    const defaultAgent = this.getDefaultAgent ? this.getDefaultAgent() : '';
     const preferredPort = this.getPreferredPort();
 
-    const runningAgent =
-      typeof this.hubManager.getDefaultAgent === 'function'
-        ? this.hubManager.getDefaultAgent()
-        : undefined;
-    const runningPreferredPort =
-      typeof this.hubManager.getPreferredPort === 'function'
-        ? this.hubManager.getPreferredPort()
-        : undefined;
-
     return (
-      this.hubManager.isRunning() &&
       Boolean(this.hubManager.getHubUrl()) &&
-      this.hubManager.getCurrentProfile() === profile &&
-      this.hubManager.getVaultPath() === vaultPath &&
-      this.hubManager.getDangerouslySkipPermissions() === allowUnrestricted &&
-      this.hubManager.getProxyUrl() === proxyUrl &&
-      (runningAgent === undefined || runningAgent === defaultAgent) &&
-      (runningPreferredPort === undefined || runningPreferredPort === preferredPort)
+      this.hubManager.matchesRunningConfig({
+        executable: executable ?? this.getAgyExecutable() ?? '',
+        profile,
+        vaultPath,
+        dangerouslySkipPermissions: allowUnrestricted,
+        proxyUrl,
+        defaultAgent,
+        preferredPort,
+      })
     );
   }
 
@@ -202,7 +200,7 @@ export class HubView extends ItemView {
     const profile = this.getProfile();
     const proxyUrl = this.getProxyUrl ? this.getProxyUrl() : '';
 
-    if (this.isHubConfigMatching(vaultPath)) {
+    if (this.isHubConfigMatching(vaultPath, execPath)) {
       if (!this.isClosed) {
         this.renderWebview(this.getThemedHubUrl());
       }

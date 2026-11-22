@@ -13,6 +13,8 @@ import { StatusBarItem } from './ui/StatusBarItem';
 import { TaskModal } from './ui/TaskModal';
 
 export default class AntigravityPlugin extends Plugin {
+  private static readonly HUB_RESTART_DEBOUNCE_MS = 400;
+
   settings: AntigravityPluginSettings = DEFAULT_SETTINGS;
   resolver: AgyResolver = new AgyResolver();
   vaultContext!: VaultContext;
@@ -20,6 +22,7 @@ export default class AntigravityPlugin extends Plugin {
   taskRunner!: VaultTaskRunner;
   statusBar!: StatusBarItem;
   private lastCliPath: string = DEFAULT_SETTINGS.cliPath;
+  private hubRestartTimer: number | null = null;
 
   async onload(): Promise<void> {
     await this.loadSettings();
@@ -227,10 +230,18 @@ export default class AntigravityPlugin extends Plugin {
   }
 
   cleanupProcesses(): void {
+    this.clearHubRestartTimer();
     this.hubManager.stopHub();
     if (this.taskRunner) {
       this.taskRunner.abort(false);
       this.taskRunner.dispose();
+    }
+  }
+
+  private clearHubRestartTimer(): void {
+    if (this.hubRestartTimer !== null) {
+      window.clearTimeout(this.hubRestartTimer);
+      this.hubRestartTimer = null;
     }
   }
 
@@ -246,7 +257,7 @@ export default class AntigravityPlugin extends Plugin {
     setConfiguredLanguage(this.settings.language);
   }
 
-  async saveSettings(): Promise<void> {
+  async saveSettings(options?: { debounceHubRestart?: boolean }): Promise<void> {
     this.settings = validateSettings(this.settings);
     if (this.settings.cliPath !== this.lastCliPath) {
       this.lastCliPath = this.settings.cliPath;
@@ -268,6 +279,19 @@ export default class AntigravityPlugin extends Plugin {
     await this.saveData(this.settings);
     setConfiguredLanguage(this.settings.language);
 
+    if (options?.debounceHubRestart) {
+      this.clearHubRestartTimer();
+      this.hubRestartTimer = window.setTimeout(() => {
+        this.hubRestartTimer = null;
+        this.syncRunningHubWithSettings();
+      }, AntigravityPlugin.HUB_RESTART_DEBOUNCE_MS);
+    } else {
+      this.clearHubRestartTimer();
+      this.syncRunningHubWithSettings();
+    }
+  }
+
+  private syncRunningHubWithSettings(): void {
     if (this.hasRunningHubConfigDrifted()) {
       this.hubManager.stopHub();
       this.refreshOpenHubViews();
@@ -277,6 +301,7 @@ export default class AntigravityPlugin extends Plugin {
   private hasRunningHubConfigDrifted(): boolean {
     const vaultPath = this.vaultContext?.getVaultBasePath() ?? this.hubManager.getVaultPath() ?? '';
     return this.hubManager.hasConfigDrift({
+      executable: this.resolver.resolve(this.settings.cliPath) ?? '',
       profile: this.settings.hubProfile || 'antigravity-obsidian',
       vaultPath,
       dangerouslySkipPermissions: this.isHubUnrestrictedAllowed(),

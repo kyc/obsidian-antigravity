@@ -375,7 +375,7 @@ describe('AgyHubManager', () => {
       spawnSpy.mockRestore();
     });
 
-    it('restarts hub when defaultAgent or preferredPort changes and reports config drift', async () => {
+    it('restarts hub when defaultAgent, preferredPort, or executable changes and reports config drift', async () => {
       const childProcess = require('child_process');
       const spawnSpy = jest.spyOn(childProcess, 'spawn').mockReturnValue({
         on: jest.fn(),
@@ -387,10 +387,12 @@ describe('AgyHubManager', () => {
       jest.spyOn(hubManager as any, 'waitForPort').mockResolvedValue(undefined);
 
       await hubManager.startHub('/bin/agy', '/test/vault', 42510, 'cfg-profile', 'agent-a', false, '');
+      expect(hubManager.getExecutable()).toBe('/bin/agy');
       expect(hubManager.getDefaultAgent()).toBe('agent-a');
       expect(hubManager.getPreferredPort()).toBe(42510);
       expect(
         hubManager.hasConfigDrift({
+          executable: '/bin/agy',
           profile: 'cfg-profile',
           vaultPath: '/test/vault',
           dangerouslySkipPermissions: false,
@@ -399,6 +401,17 @@ describe('AgyHubManager', () => {
           preferredPort: 42510,
         }),
       ).toBe(false);
+      expect(
+        hubManager.hasConfigDrift({
+          executable: '/opt/agy-v2/agy',
+          profile: 'cfg-profile',
+          vaultPath: '/test/vault',
+          dangerouslySkipPermissions: false,
+          proxyUrl: '',
+          defaultAgent: 'agent-a',
+          preferredPort: 42510,
+        }),
+      ).toBe(true);
       expect(
         hubManager.hasConfigDrift({
           profile: 'cfg-profile',
@@ -417,6 +430,10 @@ describe('AgyHubManager', () => {
       await hubManager.startHub('/bin/agy', '/test/vault', 42511, 'cfg-profile', 'agent-b', false, '');
       expect(stopSpy).toHaveBeenCalledTimes(2);
       expect(hubManager.getPreferredPort()).toBe(42511);
+
+      await hubManager.startHub('/opt/agy-v2/agy', '/test/vault', 42511, 'cfg-profile', 'agent-b', false, '');
+      expect(stopSpy).toHaveBeenCalledTimes(3);
+      expect(hubManager.getExecutable()).toBe('/opt/agy-v2/agy');
 
       spawnSpy.mockRestore();
     });
@@ -443,7 +460,7 @@ describe('AgyHubManager', () => {
       killSpy.mockRestore();
     });
 
-    it('aborts startHub before spawning if stopHub is called during stale cleanup (#2.5)', async () => {
+    it('aborts startHub before spawning if stopHub is called during stale cleanup', async () => {
       const childProcess = require('child_process');
       const spawnSpy = jest.spyOn(childProcess, 'spawn');
       let releaseCleanup: () => void = () => {};
@@ -470,7 +487,7 @@ describe('AgyHubManager', () => {
       cleanupSpy.mockRestore();
     });
 
-    it('aborts startHub before spawning if stopHub is called during port probe (#2.5)', async () => {
+    it('aborts startHub before spawning if stopHub is called during port probe', async () => {
       const childProcess = require('child_process');
       const spawnSpy = jest.spyOn(childProcess, 'spawn');
       let releasePortProbe: () => void = () => {};
@@ -495,6 +512,65 @@ describe('AgyHubManager', () => {
 
       spawnSpy.mockRestore();
       portSpy.mockRestore();
+    });
+
+    it('immediately kills spawning child, removes metadata, and aborts waitForPort when stopHub is called mid-startup', async () => {
+      const childProcess = require('child_process');
+      const { AgyProcess } = require('../../../src/core/AgyProcess');
+      const fakeChild: any = new EventEmitter();
+      fakeChild.pid = 81234;
+      fakeChild.killed = false;
+      fakeChild.exitCode = null;
+      fakeChild.signalCode = null;
+      fakeChild.kill = jest.fn(() => {
+        fakeChild.killed = true;
+        return true;
+      });
+
+      const spawnSpy = jest.spyOn(childProcess, 'spawn').mockReturnValue(fakeChild);
+      const killProcessSpy = jest.spyOn(AgyProcess, 'killProcess').mockImplementation((child: any) => {
+        child.kill('SIGTERM');
+        return { cancel: jest.fn() };
+      });
+      jest.spyOn(hubManager as any, 'performCleanupStaleHubs').mockResolvedValue(undefined);
+      jest.spyOn(hubManager as any, 'assertPortAvailable').mockResolvedValue(undefined);
+
+      let waitEntered = false;
+      let capturedIsCancelled: (() => boolean) | undefined;
+      let releaseProbe: () => void = () => {};
+      const probeGate = new Promise<void>((resolve) => {
+        releaseProbe = resolve;
+      });
+      const waitSpy = jest
+        .spyOn(hubManager as any, 'waitForPort')
+        .mockImplementation(async (opts: { isCancelled?: () => boolean }) => {
+          waitEntered = true;
+          capturedIsCancelled = opts.isCancelled;
+          await probeGate;
+          if (opts.isCancelled?.()) {
+            throw new Error('Antigravity hub start was cancelled.');
+          }
+        });
+
+      const startPromise = hubManager.startHub('/bin/agy', '/test/vault', 42532, 'mid-spawn-cancel');
+
+      while (!waitEntered) {
+        await Promise.resolve();
+      }
+      expect(capturedIsCancelled?.()).toBe(false);
+
+      // stopHub must synchronously kill the spawning child before waitForPort even returns
+      hubManager.stopHub();
+      expect(killProcessSpy).toHaveBeenCalledWith(fakeChild, true);
+      expect(capturedIsCancelled?.()).toBe(true);
+      expect(loadHubInstanceMetadata('mid-spawn-cancel')).toBeNull();
+
+      releaseProbe();
+      await expect(startPromise).rejects.toThrow(/cancelled/i);
+
+      waitSpy.mockRestore();
+      killProcessSpy.mockRestore();
+      spawnSpy.mockRestore();
     });
 
     it('captures #t=<token> emitted shortly after waitForPort, redacts diagnostics, and clears on stopHub', async () => {
@@ -707,7 +783,7 @@ describe('AgyHubManager', () => {
       const findSpy = jest.spyOn(AgyProcess, 'findAgyHubProcesses').mockReturnValue([1234, 5678]);
 
       (hubManager as any).hubProcess = { pid: 1234 };
-      (hubManager as any).spawningPid = 5678;
+      (hubManager as any).spawningProcess = { child: { pid: 5678 }, profile: 'test-profile' };
 
       await hubManager.cleanupStaleHubs('test-profile', tmpDir);
 

@@ -16,6 +16,7 @@ import {
 import { t } from '../i18n';
 
 interface InFlightHubStart {
+  executable: string;
   profile: string;
   vaultPath: string;
   dangerouslySkipPermissions: boolean;
@@ -26,6 +27,7 @@ interface InFlightHubStart {
 }
 
 export interface HubRunningConfig {
+  executable?: string;
   profile: string;
   vaultPath: string;
   dangerouslySkipPermissions: boolean;
@@ -78,12 +80,15 @@ export interface WaitForPortOptions {
    * current hub process; pass null to wait on the port alone.
    */
   child?: ChildProcess | null;
+  /** Optional predicate polled between probes to abort early when start is cancelled. */
+  isCancelled?: () => boolean;
 }
 
 export class AgyHubManager {
   private hubProcess: ChildProcess | null = null;
   private port: number | null = null;
   private vaultPath: string | null = null;
+  private currentExecutable: string = '';
   private currentProfile: string | null = null;
   private currentProjectId: string | null = null;
   private currentDangerouslySkipPermissions: boolean = false;
@@ -91,7 +96,7 @@ export class AgyHubManager {
   private currentDefaultAgent: string = '';
   private currentPreferredPort: number = 0;
   private bootstrapToken: string | null = null;
-  private spawningPid: number | null = null;
+  private spawningProcess: { child: ChildProcess; profile: string } | null = null;
   private inFlightStart: InFlightHubStart | null = null;
   private startMutex: Promise<void> = Promise.resolve();
   private killEscalation: KillEscalation | null = null;
@@ -112,6 +117,7 @@ export class AgyHubManager {
     const safeProxyUrl = proxyUrl?.trim() || '';
     const safeAgent = defaultAgent?.trim() || '';
     const targetConfig: HubRunningConfig = {
+      executable: agyExecutable,
       profile: safeProfile,
       vaultPath,
       dangerouslySkipPermissions,
@@ -126,15 +132,7 @@ export class AgyHubManager {
     }
 
     // 2. Coalescing in-flight start for the same profile, vault and permission mode
-    if (
-      this.inFlightStart &&
-      this.inFlightStart.profile === safeProfile &&
-      this.inFlightStart.vaultPath === vaultPath &&
-      this.inFlightStart.dangerouslySkipPermissions === dangerouslySkipPermissions &&
-      this.inFlightStart.proxyUrl === safeProxyUrl &&
-      this.inFlightStart.defaultAgent === safeAgent &&
-      this.inFlightStart.preferredPort === preferredPort
-    ) {
+    if (this.inFlightStart && this.matchesInFlightConfig(targetConfig)) {
       return this.inFlightStart.promise;
     }
 
@@ -206,7 +204,7 @@ export class AgyHubManager {
         detached: process.platform !== 'win32',
       });
 
-      this.spawningPid = child.pid ?? null;
+      this.spawningProcess = { child, profile: safeProfile };
 
       if (child.pid) {
         saveHubInstanceMetadata(safeProfile, {
@@ -277,6 +275,7 @@ export class AgyHubManager {
           }
           this.hubProcess = null;
           this.port = null;
+          this.currentExecutable = '';
           this.currentProfile = null;
           this.currentProjectId = null;
           this.vaultPath = null;
@@ -291,12 +290,21 @@ export class AgyHubManager {
       try {
         // Wait until server starts accepting connections
         try {
-          await this.waitForPort({ port, child, timeoutMs: 15000 });
+          await this.waitForPort({
+            port,
+            child,
+            timeoutMs: 15000,
+            isCancelled: () => generation !== this.startGeneration,
+          });
         } catch (err) {
           const detail = this.getRecentOutput();
           removeHubInstanceMetadata(safeProfile);
           AgyProcess.killProcess(child, true);
           this.recentOutput = [];
+
+          if (generation !== this.startGeneration) {
+            throw new Error('Antigravity hub start was cancelled.');
+          }
 
           const message = (err as Error).message;
           throw new Error(detail ? `${message}\n${detail}` : message);
@@ -329,6 +337,7 @@ export class AgyHubManager {
 
         this.hubProcess = child;
         this.port = port;
+        this.currentExecutable = agyExecutable;
         this.currentProfile = safeProfile;
         this.currentProjectId = projectId;
         this.vaultPath = vaultPath;
@@ -340,8 +349,8 @@ export class AgyHubManager {
 
         return this.buildHubUrl(port, projectId, undefined, this.bootstrapToken);
       } finally {
-        if (this.spawningPid === (child.pid ?? null)) {
-          this.spawningPid = null;
+        if (this.spawningProcess?.child === child) {
+          this.spawningProcess = null;
         }
       }
     };
@@ -357,6 +366,7 @@ export class AgyHubManager {
     );
 
     this.inFlightStart = {
+      executable: agyExecutable,
       profile: safeProfile,
       vaultPath,
       dangerouslySkipPermissions,
@@ -424,6 +434,10 @@ export class AgyHubManager {
     return this.currentProxyUrl;
   }
 
+  getExecutable(): string {
+    return this.currentExecutable;
+  }
+
   getDefaultAgent(): string {
     return this.currentDefaultAgent;
   }
@@ -441,6 +455,9 @@ export class AgyHubManager {
     return (
       this.isRunning() &&
       this.port !== null &&
+      (config.executable === undefined ||
+        this.currentExecutable === '' ||
+        this.currentExecutable === config.executable) &&
       this.currentProfile === safeProfile &&
       this.vaultPath === config.vaultPath &&
       this.currentDangerouslySkipPermissions === config.dangerouslySkipPermissions &&
@@ -451,29 +468,36 @@ export class AgyHubManager {
     );
   }
 
+  private matchesInFlightConfig(config: HubRunningConfig): boolean {
+    if (!this.inFlightStart) return false;
+    const safeProfile = sanitizeProfile(config.profile);
+    const safeProxyUrl = config.proxyUrl?.trim() || '';
+    const safeAgent = config.defaultAgent?.trim() || '';
+    const preferredPort = config.preferredPort ?? 0;
+
+    return (
+      (config.executable === undefined || this.inFlightStart.executable === config.executable) &&
+      this.inFlightStart.profile === safeProfile &&
+      this.inFlightStart.vaultPath === config.vaultPath &&
+      this.inFlightStart.dangerouslySkipPermissions === config.dangerouslySkipPermissions &&
+      this.inFlightStart.proxyUrl === safeProxyUrl &&
+      this.inFlightStart.defaultAgent === safeAgent &&
+      this.inFlightStart.preferredPort === preferredPort
+    );
+  }
+
   hasConfigDrift(config: HubRunningConfig): boolean {
     if (this.isRunning()) {
       return !this.matchesRunningConfig(config);
     }
     if (this.inFlightStart) {
-      const safeProfile = sanitizeProfile(config.profile);
-      const safeProxyUrl = config.proxyUrl?.trim() || '';
-      const safeAgent = config.defaultAgent?.trim() || '';
-      const preferredPort = config.preferredPort ?? 0;
-      return (
-        this.inFlightStart.profile !== safeProfile ||
-        this.inFlightStart.vaultPath !== config.vaultPath ||
-        this.inFlightStart.dangerouslySkipPermissions !== config.dangerouslySkipPermissions ||
-        this.inFlightStart.proxyUrl !== safeProxyUrl ||
-        this.inFlightStart.defaultAgent !== safeAgent ||
-        this.inFlightStart.preferredPort !== preferredPort
-      );
+      return !this.matchesInFlightConfig(config);
     }
     return false;
   }
 
   private isManagedPid(pid: number): boolean {
-    return pid === this.hubProcess?.pid || pid === this.spawningPid;
+    return pid === this.hubProcess?.pid || pid === this.spawningProcess?.child.pid;
   }
 
   /**
@@ -522,14 +546,31 @@ export class AgyHubManager {
 
   stopHub(): void {
     this.startGeneration++;
-    if (this.currentProfile) {
-      removeHubInstanceMetadata(this.currentProfile);
+    const currentProfile = this.currentProfile;
+    if (currentProfile) {
+      removeHubInstanceMetadata(currentProfile);
+    }
+    const spawning = this.spawningProcess;
+    this.spawningProcess = null;
+    if (spawning) {
+      if (spawning.profile !== currentProfile) {
+        removeHubInstanceMetadata(spawning.profile);
+      }
+      if (spawning.child !== this.hubProcess) {
+        if (!this.hubProcess) {
+          this.clearKillEscalation();
+          this.killEscalation = AgyProcess.killProcess(spawning.child, true);
+        } else {
+          AgyProcess.killProcess(spawning.child, true);
+        }
+      }
     }
     if (this.hubProcess) {
       this.clearKillEscalation();
       this.killEscalation = AgyProcess.killProcess(this.hubProcess, true);
       this.hubProcess = null;
       this.port = null;
+      this.currentExecutable = '';
       this.currentProfile = null;
       this.currentProjectId = null;
       this.vaultPath = null;
@@ -650,10 +691,13 @@ export class AgyHubManager {
   }
 
   protected async waitForPort(options: WaitForPortOptions): Promise<void> {
-    const { port, timeoutMs = 15000, child = this.hubProcess } = options;
+    const { port, timeoutMs = 15000, child = this.hubProcess, isCancelled } = options;
 
     const startTime = Date.now();
     while (Date.now() - startTime < timeoutMs) {
+      if (isCancelled?.()) {
+        throw new Error('Antigravity hub start was cancelled.');
+      }
       if (child && (child.killed || child.exitCode !== null)) {
         throw new Error('Antigravity hub process exited unexpectedly during startup.');
       }
@@ -670,6 +714,9 @@ export class AgyHubManager {
         });
       });
 
+      if (isCancelled?.()) {
+        throw new Error('Antigravity hub start was cancelled.');
+      }
       if (isListening) return;
       await new Promise((r) => window.setTimeout(r, 250));
     }

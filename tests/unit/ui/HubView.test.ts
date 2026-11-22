@@ -16,10 +16,30 @@ describe('HubView', () => {
     mockHubManager = new AgyHubManager() as jest.Mocked<AgyHubManager>;
     mockHubManager.isRunning = jest.fn().mockReturnValue(false);
     mockHubManager.getHubUrl = jest.fn().mockReturnValue('http://127.0.0.1:4096?section=test');
+    mockHubManager.getExecutable = jest.fn().mockReturnValue('/usr/bin/agy');
     mockHubManager.getCurrentProfile = jest.fn().mockReturnValue('antigravity-obsidian');
     mockHubManager.getVaultPath = jest.fn().mockReturnValue('/mock/vault');
     mockHubManager.getDangerouslySkipPermissions = jest.fn().mockReturnValue(false);
     mockHubManager.getProxyUrl = jest.fn().mockReturnValue('');
+    mockHubManager.getDefaultAgent = jest.fn().mockReturnValue('');
+    mockHubManager.getPreferredPort = jest.fn().mockReturnValue(4096);
+    mockHubManager.matchesRunningConfig = jest.fn().mockImplementation((cfg: any) => {
+      const safeProfile = String(cfg.profile || '').replace(/[^a-zA-Z0-9_-]/g, '') || 'antigravity-obsidian';
+      const safeProxy = (cfg.proxyUrl || '').trim();
+      const safeAgent = (cfg.defaultAgent || '').trim();
+      const preferredPort = cfg.preferredPort ?? 0;
+      const runningExec = mockHubManager.getExecutable();
+      return (
+        mockHubManager.isRunning() &&
+        (cfg.executable === undefined || runningExec === '' || runningExec === cfg.executable) &&
+        mockHubManager.getCurrentProfile() === safeProfile &&
+        mockHubManager.getVaultPath() === cfg.vaultPath &&
+        mockHubManager.getDangerouslySkipPermissions() === cfg.dangerouslySkipPermissions &&
+        mockHubManager.getProxyUrl() === safeProxy &&
+        mockHubManager.getDefaultAgent() === safeAgent &&
+        mockHubManager.getPreferredPort() === preferredPort
+      );
+    });
     mockHubManager.startHub = jest.fn().mockResolvedValue('http://127.0.0.1:4096?section=test');
 
     mockApp = new App();
@@ -514,5 +534,29 @@ describe('HubView', () => {
 
     expect(mockHubManager.startHub).toHaveBeenCalledTimes(5);
     expect(view.contentEl.children.find((el: any) => el.tagName === 'WEBVIEW')).toBeDefined();
+  });
+
+  it('re-binds delegated retry click listener when reopened after onunload', async () => {
+    mockApp.workspace.layoutReady = true;
+    const view = new HubView(
+      mockLeaf as WorkspaceLeaf,
+      mockHubManager,
+      () => '/usr/bin/agy',
+      () => '/mock/vault',
+      () => 4096,
+      () => 'antigravity-obsidian',
+    );
+
+    await view.onOpen();
+    expect(view.registerDomEvent).toHaveBeenCalledTimes(1);
+
+    // Re-opening without unload reuses the existing delegated listener
+    await view.onOpen();
+    expect(view.registerDomEvent).toHaveBeenCalledTimes(1);
+
+    // After onunload (which tears down Component DOM listeners), onOpen must re-bind it
+    view.onunload();
+    await view.onOpen();
+    expect(view.registerDomEvent).toHaveBeenCalledTimes(2);
   });
 });
