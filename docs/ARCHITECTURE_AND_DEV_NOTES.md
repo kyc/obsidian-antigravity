@@ -25,7 +25,7 @@ flowchart TD
         HubTrigger --> HubView[src/ui/HubView.ts]
         HubView --> AgyHubManager[src/core/AgyHubManager.ts]
         AgyHubManager --> SpawnHub[拉起 agy --hub 守护进程]
-        SpawnHub --> Webview[内嵌 iframe 加载官方 Angular SPA]
+        SpawnHub --> Webview[内嵌 Electron webview 加载官方 Web SPA]
     end
 
     subgraph TaskTrack[Task 执行轨: 原生离散库维护]
@@ -41,7 +41,7 @@ flowchart TD
 ```
 
 ### 2.1 官方 Web Hub 内嵌视图 (`HubView` + `AgyHubManager`)
-- **实现原理**：通过 [src/core/AgyHubManager.ts](../src/core/AgyHubManager.ts) 在后台守护启动 `agy --hub` 服务进程，动态分配可用端口，以 Obsidian 原生标签页（`ItemView`）内嵌 `<iframe>` 呈现完整的 Antigravity 官方 Web 界面。
+- **实现原理**：通过 [src/core/AgyHubManager.ts](../src/core/AgyHubManager.ts) 在后台守护启动 `agy --hub` 服务进程，动态分配可用端口并捕获启动横幅中的 `#t=<token>` 鉴权令牌，以 Obsidian 原生标签页（`ItemView`）内嵌 Electron `<webview>`（使用 `persist:antigravity-${profile}` 独立分区）呈现完整的 Antigravity 官方 Web 界面。
 - **核心定位**：处理复杂多轮问答、思维链分析、多 Agent 协作流、Artifacts 交互式生成。
 - **关键文件**：
   - [src/core/AgyHubManager.ts](../src/core/AgyHubManager.ts)
@@ -49,7 +49,7 @@ flowchart TD
 
 ### 2.2 离散任务执行器 (`TaskModal` + `ResultModal` + `VaultTaskRunner`)
 - **实现原理**：针对 MOC 构建、未解析双链修复、Frontmatter 校验等单次明确任务，提供快捷模态框。底层通过 `agy --print <prompt> --output-format stream-json --add-dir <vaultPath>` 调用单次非交互进程。
-- **生命周期隔离**：每次执行绑定独立的 `ActiveTaskRun` 句柄与单调递增的 `runId`，彻底杜绝已取消或旧进程延迟发送的 `'exit'` 事件污染后续任务。
+- **生命周期隔离**：每次执行绑定独立的 `ActiveTaskRun` 句柄与单调递增的 `runId`，监听 `'close'` 事件确保 `stdout`/`stderr` 管道完全排空后再结算，杜绝尾部 JSON 截断或旧进程延迟事件污染后续任务。
 - **审查与回显**：执行产物由 [src/ui/ResultModal.ts](../src/ui/ResultModal.ts) 进行 Markdown 渲染，支持一键复制、追加至当前笔记或创建新独立笔记。
 - **关键文件**：
   - [src/core/VaultTaskRunner.ts](../src/core/VaultTaskRunner.ts)
@@ -61,18 +61,18 @@ flowchart TD
 
 ## 3. Antigravity Hub 关键突破与底层逆向记录 (Hub Critical Breakthroughs)
 
-### 3.1 规避 Extension 桥接白屏悬挂
-- **踩坑现象**：早期尝试使用 `/?extensionView=true`，内嵌 iframe 陷入无止境的空白加载状态。
-- **根本原因**：`agy --hub` 前端源码在检测到 `extensionView` 时，会挂起渲染等待 VS Code RPC 握手信号。由于普通浏览器 iframe 无法提供该专有通道，前端路由死锁。
-- **解决方案**：采用纯 Web 模式接入，URL 规范格式为：`http://127.0.0.1:${port}/?section=${projectId}&hostTheme=${theme}`，彻底剔除所有 extension 桥接参数。
+### 3.1 规避 Extension 桥接白屏悬挂与 Electron `<webview>` 鉴权接入
+- **踩坑现象**：早期尝试使用 `/?extensionView=true` 配合 `<iframe>` 陷入无止境的空白加载状态；后续 Antigravity 1.5+ Hub 引入启动鉴权令牌（`#t=<token>`）与跨源安全头限制，普通 `<iframe>` 无法完成会话引导。
+- **根本原因**：`agy --hub` 前端在检测到 `extensionView` 时会挂起等待 VS Code RPC 握手信号；同时新版本 Hub 要求携带启动横幅输出的 `#t=<token>` 并维护独立 Cookie/Storage 分区。
+- **解决方案**：在 [src/ui/HubView.ts](../src/ui/HubView.ts) 中采用 Electron `<webview>`（独立 `partition="persist:antigravity-${profile}"`）以纯 Web 模式接入，剔除所有 extension 桥接参数。`AgyHubManager` 从 `agy --hub` stdout 捕获 `#t=<token>`（诊断日志中自动脱敏为 `#t=[REDACTED]`），构造标准 URL：`http://127.0.0.1:${port}/?section=${projectId}&hostTheme=${theme}&useWebSocket=true#t=${token}`（旧版 CLI 未输出 token 时自动平滑降级）。
 
 ### 3.2 并发防抖与跨 Profile 启动锁 (`inFlightStart` & `startMutex`)
-- **踩坑现象**：多标签页或快速重连并发调用 `startHub` 时，可能出现进程竞争、端口冲突、旧进程被杀导致后发请求拿到残留旧 URL。
+- **踩坑现象**：多标签页或快速重连并发调用 `startHub` 时，可能出现进程竞争、端口冲突、旧进程被杀或启动期陈旧实例清理误杀刚拉起的新 Hub。
 - **解决方案**：
-  1. 相同 **Profile + Vault 组合**的并发请求通过 `inFlightStart` 合并，共享同一个 Promise（注意是单个对象而非按 profile 索引的 Map，仅保留最近一次 in-flight 启动）；
-  2. 跨 Profile 切换由 `startMutex` 全局互斥锁串行化调度，锁内重新校验运行态，若已有进程属于不同 profile/vault 则先 `stopHub()`；
-  3. 端口与进程状态在校验就绪后原子提交至实例属性；
-  4. `stopHub()` 持有的 SIGKILL 兜底定时器会随下一次 `stopHub()` 取消，`AgyProcess.killProcess` 返回的句柄对其调用 `unref()`，避免该计时器独自阻止宿主进程退出。
+  1. 相同配置（Profile / Vault / 权限模式 / 代理 / Agent / 指定端口）的并发请求通过 `inFlightStart` 合并，共享同一个 Promise；
+  2. 跨配置切换与 `cleanupStaleHubs()` 统一由 `startMutex` 全局互斥锁串行化调度，锁内重新校验运行态与 `startGeneration`，并在 `spawn()` 前复检取消标记，同时跟踪 `spawningPid` 防止清理流程误杀启动中的子进程；
+  3. POSIX 平台在终止 `hub-instance.json` 记录的历史 PID 前，先通过 `/proc` / `ps` 校验其确实为目标 Profile 的 `agy --hub` 进程，避免 PID 复用误杀无关进程；
+  4. `AgyProcess.killProcess` 基于 `exitCode`/`signalCode` 与 `once('exit')` 判定存活并在 2s 后升级 `SIGKILL`；`stopHub()` 仅在接管新进程终止时重置兜底定时器，避免卸载期幂等重复调用提前取消升级。
 
 ### 3.3 Profile 数据隔离与路径遍历防御 (`sanitizeProfile`)
 - **踩坑现象**：默认启动 `agy --hub` 会共用 `~/.gemini/antigravity-cli/`，与终端 CLI、Antigravity IDE 发生会话串扰、锁竞争和数据库冲突。
@@ -80,8 +80,8 @@ flowchart TD
 - **安全防范**：通过 `sanitizeProfile()` 剔除白名单 `[a-zA-Z0-9_-]` 之外的字符，消除利用 `../../` 逃逸出 `~/.gemini/` 写入越界凭据的路径遍历漏洞。注意实现是**剔除**而非「校验后拒绝」：非法字符被静默删除（`../../victim` → `victim`），空结果回退为 `antigravity-obsidian`。`types.ts` 的 `validateSettings` 另用锚定正则 `/^[a-zA-Z0-9_-]+$/` 对持久化设置做严格校验。
 
 ### 3.4 认证凭据自动同步 (`ensureProfileAuth`)
-- **踩坑现象**：新建独立 Profile 目录后缺少 OAuth 凭据，前端每次启动均要求用户重新扫码/登录。
-- **解决方案**：在 Hub 启动前，`ensureProfileAuth` 自动自 `~/.gemini/antigravity-cli/` 检索 `antigravity-oauth-token`，并以严格安全权限（`0600`）复制至新 Profile 目录下。
+- **踩坑现象**：新建独立 Profile 目录后缺少 OAuth 凭据，或终端重新登录后旧 Profile 目录残留过期 Token，导致前端反复提示未认证。
+- **解决方案**：在启动前，`ensureProfileAuth`（位于 [src/core/AgyProfile.ts](../src/core/AgyProfile.ts)）对 `antigravity-cli` 直接检查其自身非空 Token；对其他隔离 Profile，在目标 Token 缺失、为空或源目录存在更新的 `mtimeMs` 凭据时，以 `0600` 权限同步写入最新凭据。
 
 ### 3.5 破解 `/onboarding` 状态悬挂死循环 (`ensureProfileOnboarding`)
 - **踩坑现象**：即使认证凭证有效，前端仍被强制重定向至 `/onboarding`，界面定格在 `Success, Continuing...` 无法进入主界面。
@@ -97,15 +97,15 @@ flowchart TD
   agent_onboarding_completed:  AGENT_ONBOARDING_STATE_COMPLETED
   migrate_convos_into_projects:  MIGRATION_STATUS_COMPLETED
   ```
-  完整字面量（含 `seen_nuxs` 与 `migrations` 键）见 `src/core/AgyHubManager.ts` 的 `ensureProfileOnboarding`。写入采用「读-改-写」：仅当既有内容不含 `AGENT_ONBOARDING_STATE_COMPLETED` 时才补齐，已有完成标记的文件原样保留。
+  完整字面量（含 `seen_nuxs` 与 `migrations` 键）见 `src/core/AgyProfile.ts` 的 `ensureProfileOnboarding`。写入采用「读-改-写」：仅当既有内容不含 `AGENT_ONBOARDING_STATE_COMPLETED` 时才补齐，已有完成标记的文件原样保留。
 
 ### 3.6 项目自动注册与哈希防碰撞 (`ensureVaultProject`)
-- **踩坑现象**：绕过 Onboarding 后，Webview 提示 "No Project"，无法读写 Vault 文件。此外不同路径下相同目录名的 Vault 会映射为同一个项目 ID 导致配置覆盖。
+- **踩坑现象**：绕过 Onboarding 后，Webview 提示 "No Project"，无法读写 Vault 文件。此外不同路径下相同目录名的 Vault 会映射为同一个项目 ID 导致配置覆盖，路径中含 `#`、`?`、空格等字符时也会破坏手动拼接的 URI。
 - **解决方案**：
   1. `ensureVaultProject(vaultPath)` 计算标准化绝对路径的 8 位 SHA256 哈希，生成全局唯一项目 ID `obsidian-${cleanName}-${hash}`；
-  2. 自动写入 `~/.gemini/config/projects/${projectId}.json`，将 `file://${vaultPath}` 注册为工程资源；
+  2. 自动写入 `~/.gemini/config/projects/${projectId}.json`，通过 Node 内置 `pathToFileURL`（`pathToFolderUri`）生成符合 RFC 8089 百分号编码的 `file:///` 资源 URI；
   3. `ensureDefaultProjectId` 在 profile cache 写入 `default_project_id.txt`；
-  4. `getHubUrl` 自动拼接 `?section=${projectId}`，启动参数追加 `--project=${projectId} --add-dir=${vaultPath}`。
+  4. `getHubUrl` 自动拼接 `?section=${projectId}&hostTheme=${theme}&useWebSocket=true`（及可选 `#t=${token}`），启动参数追加 `--project=${projectId} --add-dir=${vaultPath}`。
 
 ---
 
@@ -118,14 +118,14 @@ flowchart TD
 - **常驻风险警示**：无限制模式下生成的所有结果，在 [src/ui/ResultModal.ts](../src/ui/ResultModal.ts) 顶部以常驻醒目标识 `.antigravity-risk-banner` 进行风险披露。该横幅的**文字色刻意不使用** `--text-error`：在将两个 error token 映射为同一色相的主题（如 Omarchy）下，「红底 + 红字」会使横幅退化为一块不可读的空白色块。
 
 ### 4.2 规则路径与提示词路径净化
-- **规则路径越界拦截**：[src/core/VaultContext.ts](../src/core/VaultContext.ts) 的 `resolveSafeRulesPath` 严格校验解析后的绝对路径必须以 `vaultPath + path.sep` 开头。若检测到 `../../` 等跨库逃逸路径，立即触发 Obsidian `Notice` 警告并强制回退至根目录默认值 `AGENTS.md`。
-- **提示词上下文净化**：`sanitizeContextPath` 在生成发送给模型的 Prompt 前，对 `filePath` 与 `folderPath` 进行边界归一化，防止库外路径泄露至提示词中。
+- **规则路径越界拦截**：[src/core/VaultContext.ts](../src/core/VaultContext.ts) 的 `resolveSafeRulesPath` 通过 `path.relative` 严格校验解析后的路径位于 Vault 边界内（兼容盘符根目录）。若检测到 `../../` 等跨库逃逸路径，立即触发 Obsidian `Notice` 警告并强制回退至根目录默认值 `AGENTS.md`。
+- **提示词上下文净化与动态围栏**：`sanitizeContextPath` 在生成发送给模型的 Prompt 前对 `filePath` 与 `folderPath` 做边界归一化；`formatPromptWithContext` 为选区文本动态计算比内容中最长连续反引号多 1 个的 Markdown 围栏，避免选区内嵌代码块破坏提示词结构。
 
 ### 4.3 提示词三层叠加原理 (Prompt Layering)
 LLM 在响应时会由底层到表层合并以下上下文：
 1. **全局层**：`~/.gemini/config/GEMINI.md`（全局规范） + `~/.gemini/config/skills/`；
 2. **工作区层**：Vault 根目录 `AGENTS.md`（工作区守则，由 `ensureVaultRules` 在缺失时安全创建，`agy` 原生读取一次，插件不重复拼接）；
-3. **Agent 人设层**：选定的 `agent.md`（如 `omarchy-vault`，通过 `--agent` 注入）。
+3. **Agent 人设层**：在设置中配置自定义 Agent 后通过 `--agent` 注入（默认留空不传 `--agent`）。
 
 ### 4.4 严格运行时配置校验 (`validateSettings`)
 - 在 [src/types.ts](../src/types.ts) 中实现严格的纯函数校验，防止外部手动编辑 `data.json` 引入畸形类型（如字符串端口、非枚举 `effort`、带路径遍历的 `hubProfile`），保证所有运行时属性的绝对类型安全与边界兜底。
@@ -161,10 +161,11 @@ obsidian-antigravity/
 ├── tests/
 │   ├── __mocks__/obsidian.ts          # 完备的 Obsidian API 模拟层
 │   ├── setupWindow.ts                 # jsdom 环境与 Obsidian DOM 辅助方法垫片
-│   └── unit/                          # 完整 Jest 单元测试套件 (9 suites, 121 tests)
+│   └── unit/                          # 完整 Jest 单元测试套件
 │       ├── core/                      # AgyProfile, AgyHubManager, VaultContext, VaultTaskRunner, AgyResolver, AgyProcess
-│       ├── ui/                        # StatusBarItem 测试
+│       ├── ui/                        # HubView, ResultModal, StatusBarItem 测试
 │       ├── i18n.test.ts               # 语言解析与插值测试
+│       ├── main.test.ts               # 插件生命周期、设置联动与任务模式快照测试
 │       └── settings.test.ts           # 运行时配置类型与边界测试
 ├── docs/
 │   ├── ARCHITECTURE_AND_DEV_NOTES.md  # 本文档 (系统架构、避坑要点与演进记录)
