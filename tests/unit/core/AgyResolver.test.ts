@@ -45,6 +45,31 @@ describe('AgyResolver', () => {
     expect(resolved).toBeNull();
   });
 
+  it('does not silently fall back to cached path when an explicit configuredPath is invalid', () => {
+    mockFsOps.existsSync.mockImplementation((p) => p === '/usr/local/bin/agy');
+    mockFsOps.statSync.mockReturnValue({ isFile: () => true });
+    mockFsOps.accessSync.mockReturnValue(undefined);
+
+    // First auto-detect caches /usr/local/bin/agy
+    expect(resolver.resolve('')).toBe('/usr/local/bin/agy');
+
+    // User sets an invalid custom path: must return null instead of stale cached binary
+    expect(resolver.resolve('/wrong/path/agy')).toBeNull();
+  });
+
+  it('returns to auto-detection after clearing cache when custom path is emptied', () => {
+    mockFsOps.existsSync.mockImplementation(
+      (p) => p === '/custom/old/agy' || p === '/usr/local/bin/agy',
+    );
+    mockFsOps.statSync.mockReturnValue({ isFile: () => true });
+    mockFsOps.accessSync.mockReturnValue(undefined);
+
+    expect(resolver.resolve('/custom/old/agy')).toBe('/custom/old/agy');
+
+    resolver.clearCache();
+    expect(resolver.resolve('')).toBe('/usr/local/bin/agy');
+  });
+
   describe('failed lookup caching', () => {
     const failFs = () => {
       mockFsOps.existsSync.mockReturnValue(false);

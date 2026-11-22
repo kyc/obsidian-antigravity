@@ -144,6 +144,25 @@ describe('VaultContext', () => {
       expect(formatted).not.toContain('../../etc/passwd');
       expect(formatted).toContain('Target File: passwd');
     });
+
+    it('uses a markdown fence longer than any backtick run inside selection text', () => {
+      const selectionWithCodeBlock = 'Before\n```ts\nconst x = 1;\n```\nAfter';
+      const formatted = vaultContext.formatPromptWithContext('Explain this', {
+        scope: 'selection',
+        filePath: 'Notes/Code.md',
+        selectionText: selectionWithCodeBlock,
+      });
+
+      expect(formatted).toContain(`Selected Text:\n\`\`\`\`markdown\n${selectionWithCodeBlock}\n\`\`\`\``);
+
+      const selectionWithFourTicks = '````md\ncode\n````';
+      const formatted5 = vaultContext.formatPromptWithContext('Explain', {
+        scope: 'selection',
+        filePath: 'Notes/Nested.md',
+        selectionText: selectionWithFourTicks,
+      });
+      expect(formatted5).toContain(`Selected Text:\n\`\`\`\`\`markdown\n${selectionWithFourTicks}\n\`\`\`\`\``);
+    });
   });
 
   describe('resolveSafeRulesPath', () => {
@@ -155,6 +174,21 @@ describe('VaultContext', () => {
     it('resolves safe nested rules path inside vault', () => {
       const resolved = vaultContext.resolveSafeRulesPath('.rules/AGENTS.md');
       expect(resolved).toBe(path.resolve('/home/user/vault', '.rules/AGENTS.md'));
+    });
+
+    it('accepts paths when vault is located at filesystem root', () => {
+      const rootPath = path.parse(process.cwd()).root;
+      mockApp.vault.adapter.getBasePath.mockReturnValue(rootPath);
+
+      expect(vaultContext.resolveSafeRulesPath('AGENTS.md')).toBe(path.resolve(rootPath, 'AGENTS.md'));
+      expect(vaultContext.sanitizeContextPath('Notes/RootNote.md')).toBe('Notes/RootNote.md');
+    });
+
+    it('accepts legitimate filenames starting with two dots inside vault', () => {
+      expect(vaultContext.resolveSafeRulesPath('..rules.md')).toBe(
+        path.resolve('/home/user/vault', '..rules.md'),
+      );
+      expect(vaultContext.sanitizeContextPath('..notes.md')).toBe('..notes.md');
     });
 
     it('detects path traversal and falls back to default AGENTS.md with notice', () => {

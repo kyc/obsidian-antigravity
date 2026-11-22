@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { fileURLToPath } from 'url';
 import {
   ensureDefaultProjectId,
   ensureProfileAuth,
@@ -72,6 +73,56 @@ describe('AgyProfile', () => {
       // Traversal was sanitized to 'victim', so token was written inside .gemini/victim, NOT outside
       expect(fs.existsSync(path.join(tmpDir, 'victim'))).toBe(false);
       expect(fs.existsSync(path.join(tmpDir, '.gemini', 'victim', 'antigravity-oauth-token'))).toBe(true);
+    });
+
+    it('refreshes stale target token when source token has a newer mtime', () => {
+      const cliDir = path.join(tmpDir, '.gemini', 'antigravity-cli');
+      fs.mkdirSync(cliDir, { recursive: true });
+      const srcTokenPath = path.join(cliDir, 'antigravity-oauth-token');
+      fs.writeFileSync(srcTokenPath, 'fresh-token-v2');
+
+      const targetDir = path.join(tmpDir, '.gemini', 'test-obsidian');
+      fs.mkdirSync(targetDir, { recursive: true });
+      const targetTokenPath = path.join(targetDir, 'antigravity-oauth-token');
+      fs.writeFileSync(targetTokenPath, 'expired-token-v1');
+
+      // Backdate target token and set source token newer
+      const oldTime = new Date(Date.now() - 60_000);
+      const newTime = new Date(Date.now() - 1_000);
+      fs.utimesSync(targetTokenPath, oldTime, oldTime);
+      fs.utimesSync(srcTokenPath, newTime, newTime);
+
+      const result = ensureProfileAuth('test-obsidian', tmpDir);
+      expect(result).toBe(true);
+      expect(fs.readFileSync(targetTokenPath, 'utf8')).toBe('fresh-token-v2');
+      if (process.platform !== 'win32') {
+        expect(fs.statSync(targetTokenPath).mode & 0o777).toBe(0o600);
+      }
+    });
+
+    it('re-syncs token when target token file exists but is empty', () => {
+      const cliDir = path.join(tmpDir, '.gemini', 'antigravity-cli');
+      fs.mkdirSync(cliDir, { recursive: true });
+      fs.writeFileSync(path.join(cliDir, 'antigravity-oauth-token'), 'valid-token');
+
+      const targetDir = path.join(tmpDir, '.gemini', 'test-obsidian');
+      fs.mkdirSync(targetDir, { recursive: true });
+      const targetTokenPath = path.join(targetDir, 'antigravity-oauth-token');
+      fs.writeFileSync(targetTokenPath, '');
+
+      const result = ensureProfileAuth('test-obsidian', tmpDir);
+      expect(result).toBe(true);
+      expect(fs.readFileSync(targetTokenPath, 'utf8')).toBe('valid-token');
+    });
+
+    it('returns true for antigravity-cli profile when its own token exists and false when missing', () => {
+      expect(ensureProfileAuth('antigravity-cli', tmpDir)).toBe(false);
+
+      const cliDir = path.join(tmpDir, '.gemini', 'antigravity-cli');
+      fs.mkdirSync(cliDir, { recursive: true });
+      fs.writeFileSync(path.join(cliDir, 'antigravity-oauth-token'), 'cli-own-token');
+
+      expect(ensureProfileAuth('antigravity-cli', tmpDir)).toBe(true);
     });
   });
 
@@ -369,6 +420,16 @@ describe('AgyProfile', () => {
         const testPath = 'C:\\Users\\Sunny\\Vault';
         expect(pathToFolderUri(testPath)).toBe('file:///C:/Users/Sunny/Vault');
       }
+    });
+
+    it('percent-encodes spaces, #, ?, %, and non-ASCII characters per RFC 8089', () => {
+      const rawPath = path.join('/home/user', 'Notes #1?100%', '日本語 Vault');
+      const uri = pathToFolderUri(rawPath);
+
+      expect(uri).toMatch(/^file:\/\/\//);
+      expect(uri).toContain('Notes%20%231%3F100%25');
+      expect(uri).toContain('%E6%97%A5%E6%9C%AC%E8%AA%9E%20Vault');
+      expect(fileURLToPath(uri)).toBe(path.resolve(rawPath));
     });
   });
 });

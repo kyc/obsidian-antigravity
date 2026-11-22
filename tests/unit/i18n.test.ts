@@ -99,6 +99,11 @@ describe('i18n subsystem', () => {
       expect(zhTwKeys).toEqual(enKeys);
     });
 
+    it('uses accurate Traditional Chinese terminology for headless mode', () => {
+      expect(zhTw['settings.allowUnrestrictedDesc']).toContain('無頭模式');
+      expect(zhTw['settings.allowUnrestrictedDesc']).not.toContain('無周邊模式');
+    });
+
     it('contains non-empty translation strings for all keys', () => {
       for (const [k, v] of Object.entries(en)) {
         expect(typeof v).toBe('string');

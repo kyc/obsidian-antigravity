@@ -106,6 +106,7 @@ describe('validateSettings', () => {
 
 describe('AntigravitySettingTab', () => {
   let mockPlugin: any;
+  let resolver: AgyResolver;
   let tab: AntigravitySettingTab;
 
   beforeEach(() => {
@@ -126,7 +127,7 @@ describe('AntigravitySettingTab', () => {
         await this.saveData(this.settings);
       }),
     };
-    const resolver = new AgyResolver({
+    resolver = new AgyResolver({
       existsSync: () => false,
       statSync: () => ({ isFile: () => false }),
       accessSync: () => {},
@@ -167,6 +168,48 @@ describe('AntigravitySettingTab', () => {
     expect(updateSpy).toHaveBeenCalledTimes(1);
 
     updateSpy.mockRestore();
+  });
+
+  it('normalizes invalid hubPort and hubProfile through validateSettings in setControlValue', async () => {
+    await tab.setControlValue('hubPort', -1);
+    expect(mockPlugin.settings.hubPort).toBe(DEFAULT_SETTINGS.hubPort);
+
+    await tab.setControlValue('hubPort', 99999);
+    expect(mockPlugin.settings.hubPort).toBe(DEFAULT_SETTINGS.hubPort);
+
+    await tab.setControlValue('hubPort', Number.NaN);
+    expect(mockPlugin.settings.hubPort).toBe(DEFAULT_SETTINGS.hubPort);
+
+    await tab.setControlValue('hubProfile', '../evil profile');
+    expect(mockPlugin.settings.hubProfile).toBe(DEFAULT_SETTINGS.hubProfile);
+
+    await tab.setControlValue('hubProfile', '  custom-profile_1  ');
+    expect(mockPlugin.settings.hubProfile).toBe('custom-profile_1');
+  });
+
+  it('defaults defaultAgent to empty string so --agent is omitted for new installs', () => {
+    expect(DEFAULT_SETTINGS.defaultAgent).toBe('');
+    expect(validateSettings({}).defaultAgent).toBe('');
+  });
+
+  it('uses example placeholder for defaultAgent control in setting definitions', () => {
+    const defs = tab.getSettingDefinitions();
+    const agentDef = defs.find((d: any) => d.control?.key === 'defaultAgent') as any;
+    expect(agentDef?.control?.placeholder).toBe('e.g. omarchy-vault');
+  });
+
+  it('clears AgyResolver cache when cliPath changes via setControlValue', async () => {
+    const clearSpy = jest.spyOn(resolver, 'clearCache');
+
+    await tab.setControlValue('cliPath', '/custom/bin/agy');
+    expect(clearSpy).toHaveBeenCalledTimes(1);
+    expect(mockPlugin.settings.cliPath).toBe('/custom/bin/agy');
+
+    await tab.setControlValue('cliPath', '');
+    expect(clearSpy).toHaveBeenCalledTimes(2);
+    expect(mockPlugin.settings.cliPath).toBe('');
+
+    clearSpy.mockRestore();
   });
 });
 

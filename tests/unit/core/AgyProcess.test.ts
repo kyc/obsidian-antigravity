@@ -1,3 +1,4 @@
+import { EventEmitter } from 'events';
 import * as os from 'os';
 import * as path from 'path';
 import { AgyProcess } from '../../../src/core/AgyProcess';
@@ -153,13 +154,87 @@ describe('AgyProcess.killProcess', () => {
     const handle2 = AgyProcess.killProcess(killedChild);
     expect(killedChild.kill).not.toHaveBeenCalled();
     handle2.cancel();
+
+    const exitedChild = { killed: false, exitCode: 0, signalCode: null, kill: jest.fn() } as any;
+    const handle3 = AgyProcess.killProcess(exitedChild);
+    expect(exitedChild.kill).not.toHaveBeenCalled();
+    handle3.cancel();
+
+    const signaledChild = { killed: false, exitCode: null, signalCode: 'SIGTERM', kill: jest.fn() } as any;
+    const handle4 = AgyProcess.killProcess(signaledChild);
+    expect(signaledChild.kill).not.toHaveBeenCalled();
+    handle4.cancel();
   });
 
   it('sends SIGTERM to child by default', () => {
-    const child = { killed: false, pid: 1234, kill: jest.fn() } as any;
+    const child = { killed: false, exitCode: null, signalCode: null, pid: 1234, kill: jest.fn() } as any;
     const handle = AgyProcess.killProcess(child);
     expect(child.kill).toHaveBeenCalledWith('SIGTERM');
     handle.cancel();
+  });
+
+  it('escalates to SIGKILL after grace period even when SIGTERM sets child.killed = true', () => {
+    jest.useFakeTimers();
+    const origPlatform = process.platform;
+    try {
+      Object.defineProperty(process, 'platform', { value: 'linux' });
+      const processKillSpy = jest.spyOn(process, 'kill').mockImplementation(() => true);
+      const child: any = new EventEmitter();
+      child.pid = 4321;
+      child.killed = false;
+      child.exitCode = null;
+      child.signalCode = null;
+      // Mirror real Node.js ChildProcess.kill(): sets child.killed = true synchronously on delivery.
+      child.kill = jest.fn(() => {
+        child.killed = true;
+        return true;
+      });
+
+      const handle = AgyProcess.killProcess(child, true);
+      expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+      expect(processKillSpy).toHaveBeenCalledWith(-4321, 'SIGTERM');
+      expect(child.killed).toBe(true);
+
+      jest.advanceTimersByTime(1999);
+      expect(child.kill).not.toHaveBeenCalledWith('SIGKILL');
+
+      jest.advanceTimersByTime(1);
+      expect(child.kill).toHaveBeenCalledWith('SIGKILL');
+      expect(processKillSpy).toHaveBeenCalledWith(-4321, 'SIGKILL');
+
+      handle.cancel();
+      processKillSpy.mockRestore();
+    } finally {
+      Object.defineProperty(process, 'platform', { value: origPlatform });
+      jest.useRealTimers();
+    }
+  });
+
+  it('cancels SIGKILL escalation automatically when child emits exit before timeout', () => {
+    jest.useFakeTimers();
+    try {
+      const child: any = new EventEmitter();
+      child.pid = 4322;
+      child.killed = false;
+      child.exitCode = null;
+      child.signalCode = null;
+      child.kill = jest.fn(() => {
+        child.killed = true;
+        return true;
+      });
+
+      AgyProcess.killProcess(child);
+      expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+
+      child.exitCode = 0;
+      child.emit('exit', 0, null);
+
+      jest.advanceTimersByTime(2500);
+      expect(child.kill).toHaveBeenCalledTimes(1);
+      expect(child.kill).not.toHaveBeenCalledWith('SIGKILL');
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it('sends signals to process group when killProcessGroup is true on non-Windows', () => {

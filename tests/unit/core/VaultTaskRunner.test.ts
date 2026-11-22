@@ -3,6 +3,7 @@ import { Notice } from 'obsidian';
 import { AgyProcess } from '../../../src/core/AgyProcess';
 import { VaultContext } from '../../../src/core/VaultContext';
 import { TaskCancelledError, VaultTaskRunner } from '../../../src/core/VaultTaskRunner';
+import { setLocaleForTesting } from '../../../src/i18n';
 
 describe('VaultTaskRunner', () => {
   let mockApp: any;
@@ -77,7 +78,7 @@ describe('VaultTaskRunner', () => {
       ),
     );
 
-    fakeChild.emit('exit', 0);
+    fakeChild.emit('close', 0);
 
     const result = await runPromise;
     expect(result).toBe('Hello world');
@@ -103,7 +104,7 @@ describe('VaultTaskRunner', () => {
         'E printmode.go:266] Print mode: invalid model selection (--model "gemini-3.8-flash-high" --effort "medium"): --model gemini-3.8-flash-high conflicts with --effort=medium\n',
       ),
     );
-    fakeChild.emit('exit', 1);
+    fakeChild.emit('close', 1);
 
     await expect(runPromise).rejects.toThrow(/already includes a reasoning level/i);
   });
@@ -124,7 +125,7 @@ describe('VaultTaskRunner', () => {
       'data',
       Buffer.from('--model gemini-3.8-flash requires --effort (available: low, medium, high)\n'),
     );
-    fakeChild.emit('exit', 1);
+    fakeChild.emit('close', 1);
 
     await expect(runPromise).rejects.toThrow(/-high\/-medium\/-low suffix/i);
   });
@@ -156,7 +157,7 @@ describe('VaultTaskRunner', () => {
         }) + '\n',
       ),
     );
-    fakeChild.emit('exit', 1);
+    fakeChild.emit('close', 1);
 
     const output = await runPromise;
     expect(output).toContain('当前打开的笔记是：图工程');
@@ -185,7 +186,7 @@ describe('VaultTaskRunner', () => {
         }) + '\n',
       ),
     );
-    fakeChild.emit('exit', 1);
+    fakeChild.emit('close', 1);
 
     await expect(runPromise).rejects.toThrow(/execution failed/i);
   });
@@ -227,7 +228,7 @@ describe('VaultTaskRunner', () => {
         }) + '\n',
       ),
     );
-    fakeChild.emit('exit', 0);
+    fakeChild.emit('close', 0);
 
     await runPromise;
 
@@ -252,7 +253,7 @@ describe('VaultTaskRunner', () => {
       'data',
       Buffer.from('I0916 21:47:17.475190 1 resolver.go:85] Model ID gemini-9.9 not in local config\n'),
     );
-    fakeChild.emit('exit', 1);
+    fakeChild.emit('close', 1);
 
     await expect(runPromise).rejects.toThrow(/agy models/);
   });
@@ -273,7 +274,7 @@ describe('VaultTaskRunner', () => {
       'data',
       Buffer.from('E0916 errorreport.go:224] error getting token source: You are not logged into Antigravity.\n'),
     );
-    fakeChild.emit('exit', 1);
+    fakeChild.emit('close', 1);
 
     await expect(runPromise).rejects.toThrow(/not authenticated/i);
   });
@@ -304,7 +305,7 @@ describe('VaultTaskRunner', () => {
       // filter would wrongly surface to the user.
       Buffer.from('real failure detail\nI1016 12:00:00.000000    42 setup.go:10] starting up\n'),
     );
-    fakeChild.emit('exit', 1);
+    fakeChild.emit('close', 1);
 
     const err = await runPromise.catch((e: Error) => e.message);
     expect(err).toContain('real failure detail');
@@ -327,7 +328,7 @@ describe('VaultTaskRunner', () => {
       'data',
       Buffer.from('W0916 errorreport.go:224] failed to poll ListExperiments: error getting token source\n'),
     );
-    fakeChild.emit('exit', 1);
+    fakeChild.emit('close', 1);
 
     await expect(runPromise).rejects.not.toThrow(/not authenticated/i);
   });
@@ -348,7 +349,7 @@ describe('VaultTaskRunner', () => {
       'data',
       Buffer.from('E reading log file: read-only file system\n'),
     );
-    fakeChild.emit('exit', 1);
+    fakeChild.emit('close', 1);
 
     await expect(runPromise).rejects.toThrow(/read-only/i);
   });
@@ -367,7 +368,7 @@ describe('VaultTaskRunner', () => {
 
     fakeChild.stderr.emit('data', Buffer.from('I0916 noise line one\n'));
     fakeChild.stderr.emit('data', Buffer.from('something specific broke\n'));
-    fakeChild.emit('exit', 3);
+    fakeChild.emit('close', 3);
 
     await expect(runPromise).rejects.toThrow(/something specific broke/);
   });
@@ -387,7 +388,7 @@ describe('VaultTaskRunner', () => {
     });
 
     expect(spawnSpy.mock.calls[0][0].args).not.toContain('--dangerously-skip-permissions');
-    fakeChild.emit('exit', 0);
+    fakeChild.emit('close', 0);
     await runPromise;
   });
 
@@ -408,7 +409,7 @@ describe('VaultTaskRunner', () => {
       'data',
       Buffer.from(JSON.stringify({ event: 'result', result: { status: 'SUCCESS', response: 'Tail' } })),
     );
-    fakeChild.emit('exit', 0);
+    fakeChild.emit('close', 0);
 
     await expect(runPromise).resolves.toBe('Tail');
     expect(events).toContain('done');
@@ -440,7 +441,7 @@ describe('VaultTaskRunner', () => {
         }) + '\n',
       ),
     );
-    fakeChild.emit('exit', 0);
+    fakeChild.emit('close', 0);
 
     const result = await runPromise;
     expect(result).toBe('Done unrestricted');
@@ -471,11 +472,79 @@ describe('VaultTaskRunner', () => {
         }) + '\n',
       ),
     );
-    fakeChild.emit('exit', 0);
+    fakeChild.emit('close', 0);
 
     const result = await runPromise;
     expect(result).toContain('Completed read-only parts');
-    expect(result).toContain('Restricted Execution: Certain tool permissions were denied (RunCommand)');
+    expect(result).toContain('Restricted execution: certain tool permissions were denied (RunCommand)');
+  });
+
+  it('localizes task status, tool progress, errors, and restricted warnings via i18n', async () => {
+    setLocaleForTesting('zh-cn');
+    try {
+      const fakeChild: any = new EventEmitter();
+      fakeChild.stdout = new EventEmitter();
+      fakeChild.stderr = new EventEmitter();
+      jest.spyOn(AgyProcess, 'spawnProcess').mockReturnValue(fakeChild);
+
+      const statusLog: string[] = [];
+      const localizedRunner = new VaultTaskRunner(mockVaultContext, () => mockSettings, (_s, text) => {
+        if (text) statusLog.push(text);
+      });
+
+      const runPromise = localizedRunner.runTask('/bin/agy', {
+        prompt: 'Check i18n',
+        context: { scope: 'vault' },
+      });
+
+      // Concurrent task error should be localized
+      await expect(
+        localizedRunner.runTask('/bin/agy', { prompt: 'Second', context: { scope: 'vault' } }),
+      ).rejects.toThrow('另一个 Antigravity 任务正在运行');
+
+      fakeChild.stdout.emit(
+        'data',
+        Buffer.from(
+          JSON.stringify({
+            event: 'step_update',
+            step_update: { step_type: 'tool', state: 'ACTIVE', tool_name: 'read_file' },
+          }) + '\n',
+        ),
+      );
+      fakeChild.stdout.emit(
+        'data',
+        Buffer.from(
+          JSON.stringify({
+            event: 'step_update',
+            step_update: { step_type: 'tool', state: 'DONE', tool_name: 'read_file' },
+          }) + '\n',
+        ),
+      );
+      fakeChild.stdout.emit(
+        'data',
+        Buffer.from(
+          JSON.stringify({
+            event: 'result',
+            result: {
+              status: 'SUCCESS',
+              response: '完成',
+              denied_actions: [{ action: 'cmd', display_name: 'RunCommand' }],
+            },
+          }) + '\n',
+        ),
+      );
+      fakeChild.emit('close', 0);
+
+      const result = await runPromise;
+      expect(statusLog).toContain('正在初始化...');
+      expect(statusLog).toContain('[read_file] 正在运行 read_file');
+      expect(statusLog).toContain('[read_file] 已完成 read_file');
+      expect(result).toContain('受限执行：部分工具权限已被拦截（RunCommand）');
+
+      localizedRunner.dispose();
+    } finally {
+      setLocaleForTesting(null);
+    }
   });
 
   it('rejects with error when result has status ERROR', async () => {
@@ -501,7 +570,7 @@ describe('VaultTaskRunner', () => {
       ),
     );
 
-    fakeChild.emit('exit', 1);
+    fakeChild.emit('close', 1);
 
     await expect(runPromise).rejects.toThrow('Model quota exceeded');
   });
@@ -526,7 +595,7 @@ describe('VaultTaskRunner', () => {
 
     expect(killSpy).toHaveBeenCalledWith(fakeChild);
 
-    fakeChild.emit('exit', null);
+    fakeChild.emit('close', null);
 
     await expect(runPromise).rejects.toThrow(TaskCancelledError);
     expect(runner.running).toBe(false);
@@ -602,7 +671,7 @@ describe('VaultTaskRunner', () => {
     const statusCountBeforeLateExit = statusUpdates.length;
 
     // 4. Stale/delayed exit event arrives from killed Task 1
-    fakeChild1.emit('exit', null);
+    fakeChild1.emit('close', null);
 
     // 5. Assert Task 2 is NOT polluted: running must still be true!
     expect(runner.running).toBe(true);
@@ -620,10 +689,55 @@ describe('VaultTaskRunner', () => {
         }) + '\n',
       ),
     );
-    fakeChild2.emit('exit', 0);
+    fakeChild2.emit('close', 0);
 
     const task2Result = await run2Promise;
     expect(task2Result).toBe('Task 2 finished');
     expect(runner.running).toBe(false);
+  });
+
+  it('waits for close rather than exit so trailing stdout result JSON is not truncated', async () => {
+    const fakeChild: any = new EventEmitter();
+    fakeChild.stdout = new EventEmitter();
+    fakeChild.stderr = new EventEmitter();
+    jest.spyOn(AgyProcess, 'spawnProcess').mockReturnValue(fakeChild);
+
+    let settled = false;
+    const runPromise = runner
+      .runTask('/bin/agy', {
+        prompt: 'Summarize note',
+        context: { scope: 'vault' },
+      })
+      .finally(() => {
+        settled = true;
+      });
+
+    // Process exits while final stdout pipe buffer has not yet been flushed
+    fakeChild.emit('exit', 0);
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(runner.running).toBe(true);
+
+    // Final result chunk arrives after 'exit' and before 'close'
+    fakeChild.stdout.emit(
+      'data',
+      Buffer.from(
+        JSON.stringify({
+          event: 'result',
+          result: {
+            status: 'SUCCESS',
+            response: 'Final flushed answer',
+            denied_actions: [{ action: 'delete', display_name: 'DeleteFile' }],
+          },
+        }),
+      ),
+    );
+    fakeChild.emit('close', 0);
+
+    const output = await runPromise;
+    expect(settled).toBe(true);
+    expect(runner.running).toBe(false);
+    expect(output).toContain('Final flushed answer');
+    expect(output).toContain('DeleteFile');
   });
 });

@@ -1,5 +1,10 @@
 // Mock for Obsidian API
 
+export class Component {
+  load = jest.fn();
+  unload = jest.fn();
+}
+
 export class Plugin {
   app: any;
   manifest: any;
@@ -12,8 +17,33 @@ export class Plugin {
   addRibbonIcon = jest.fn();
   addCommand = jest.fn();
   addSettingTab = jest.fn();
+  addStatusBarItem = jest.fn().mockImplementation(() => {
+    const makeSpan = () => ({
+      setText: jest.fn(),
+      addClass: jest.fn(),
+      empty: jest.fn(),
+      show: jest.fn(),
+      hide: jest.fn(),
+    });
+    const makeDiv = () => ({
+      title: '',
+      addClass: jest.fn(),
+      removeClass: jest.fn(),
+      setText: jest.fn(),
+      setAttr: jest.fn(),
+      empty: jest.fn(),
+      createSpan: jest.fn().mockImplementation(() => makeSpan()),
+      addEventListener: jest.fn(),
+    });
+    return {
+      ...makeDiv(),
+      createDiv: jest.fn().mockImplementation(() => makeDiv()),
+    };
+  });
   registerView = jest.fn();
   registerEvent = jest.fn();
+  registerDomEvent = jest.fn();
+  register = jest.fn();
   loadData = jest.fn().mockResolvedValue({});
   saveData = jest.fn().mockResolvedValue(undefined);
 }
@@ -195,6 +225,9 @@ export class App {
     adapter: {
       basePath: '/mock/vault/path',
     },
+    create: jest.fn().mockResolvedValue(undefined),
+    append: jest.fn().mockResolvedValue(undefined),
+    getAbstractFileByPath: jest.fn().mockReturnValue(null),
   };
   workspace: any = {
     layoutReady: true,
@@ -227,11 +260,33 @@ export class MarkdownView {
 }
 
 export class Setting {
-  constructor(containerEl: any) {}
+  static instances: Setting[] = [];
+  buttons: Array<{ text: string; clickHandler: (() => unknown) | null }> = [];
+
+  constructor(containerEl: any) {
+    Setting.instances.push(this);
+  }
   setName = jest.fn().mockReturnThis();
   setDesc = jest.fn().mockReturnThis();
   addToggle = jest.fn().mockReturnThis();
   addTextArea = jest.fn().mockReturnThis();
+  addButton = jest.fn((cb: (btn: any) => void) => {
+    const record = { text: '', clickHandler: null as (() => unknown) | null };
+    const btn = {
+      setButtonText: jest.fn((text: string) => {
+        record.text = text;
+        return btn;
+      }),
+      setCta: jest.fn().mockReturnThis(),
+      onClick: jest.fn((handler: () => unknown) => {
+        record.clickHandler = handler;
+        return btn;
+      }),
+    };
+    cb(btn);
+    this.buttons.push(record);
+    return this;
+  });
 }
 
 export class TextAreaComponent {
@@ -278,8 +333,10 @@ export class Modal {
     addClass: jest.fn(),
   };
   contentEl: any = {
+    createEl: jest.fn().mockReturnValue({ addEventListener: jest.fn() }),
     createDiv: jest.fn().mockReturnValue({
       createEl: jest.fn().mockReturnValue({ addEventListener: jest.fn() }),
+      createSpan: jest.fn().mockReturnValue({}),
       createDiv: jest.fn().mockReturnValue({
         createEl: jest.fn().mockReturnValue({ addEventListener: jest.fn() }),
         createDiv: jest.fn().mockReturnValue({
@@ -298,10 +355,10 @@ export class Modal {
     this.app = app;
   }
 
-  open = jest.fn();
-  close = jest.fn();
-  onOpen = jest.fn();
-  onClose = jest.fn();
+  open(): void {}
+  close(): void {}
+  onOpen(): void | Promise<void> {}
+  onClose(): void {}
 }
 
 class MockMenuItem {
