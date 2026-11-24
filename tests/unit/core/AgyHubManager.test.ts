@@ -1,10 +1,16 @@
 import { EventEmitter } from 'events';
 import * as fs from 'fs';
+import * as http from 'http';
+import * as net from 'net';
 import * as os from 'os';
 import * as path from 'path';
 import { Notice } from 'obsidian';
 import { AgyHubManager, extractHubBootstrapToken } from '../../../src/core/AgyHubManager';
-import { loadHubInstanceMetadata, saveHubInstanceMetadata } from '../../../src/core/AgyProfile';
+import {
+  getHubDiscoveryFilePath,
+  loadHubInstanceMetadata,
+  saveHubInstanceMetadata,
+} from '../../../src/core/AgyProfile';
 
 describe('AgyHubManager', () => {
   let hubManager: AgyHubManager;
@@ -652,6 +658,236 @@ describe('AgyHubManager', () => {
       await expect(
         (hubManager as any).waitForBootstrapToken(fakeChild, () => null, jest.fn(), 20),
       ).resolves.toBeUndefined();
+    });
+
+    const withMockMintHub = async (
+      pid: number,
+      handler: (req: http.IncomingMessage, res: http.ServerResponse) => void,
+      run: (ctx: {
+        manager: AgyHubManager;
+        port: number;
+        tmpHome: string;
+        stdout: EventEmitter;
+        writeDiscovery: (profile: string, data: Record<string, unknown>) => void;
+      }) => Promise<void>,
+    ) => {
+      const childProcess = require('child_process');
+      const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'agy-hub-mint-'));
+      const manager = new AgyHubManager(tmpHome);
+      const server = http.createServer(handler);
+      await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));
+      const port = (server.address() as net.AddressInfo).port;
+      const stdout = new EventEmitter();
+      const stderr = new EventEmitter();
+      (stdout as any).resume = jest.fn();
+      (stderr as any).resume = jest.fn();
+
+      const spawnSpy = jest.spyOn(childProcess, 'spawn').mockReturnValue({
+        pid,
+        on: jest.fn(),
+        off: jest.fn(),
+        kill: jest.fn(),
+        killed: false,
+        exitCode: null,
+        stdout,
+        stderr,
+      });
+      const assertPortSpy = jest.spyOn(manager as any, 'assertPortAvailable').mockResolvedValue(undefined);
+      const waitPortSpy = jest.spyOn(manager as any, 'waitForPort').mockResolvedValue(undefined);
+
+      try {
+        await run({
+          manager,
+          port,
+          tmpHome,
+          stdout,
+          writeDiscovery: (profile, data) => {
+            const p = getHubDiscoveryFilePath(profile, port, tmpHome);
+            fs.mkdirSync(path.dirname(p), { recursive: true });
+            fs.writeFileSync(p, JSON.stringify(data));
+          },
+        });
+      } finally {
+        manager.stopHub();
+        waitPortSpy.mockRestore();
+        assertPortSpy.mockRestore();
+        spawnSpy.mockRestore();
+        await new Promise<void>((r) => server.close(() => r()));
+        fs.rmSync(tmpHome, { recursive: true, force: true });
+      }
+    };
+
+    it('keeps authenticated UI bootstrap env intact without disabling bootstrap or spoofing VS Code host', async () => {
+      const childProcess = require('child_process');
+      const prevBootstrap = process.env.AGY_REQUIRE_AUTHENTICATED_UI_BOOTSTRAP;
+      const prevVscode = process.env.ANTIGRAVITY_VSCODE_HOST;
+      delete process.env.AGY_REQUIRE_AUTHENTICATED_UI_BOOTSTRAP;
+      delete process.env.ANTIGRAVITY_VSCODE_HOST;
+
+      let capturedEnv: Record<string, string> | undefined;
+      const spawnSpy = jest
+        .spyOn(childProcess, 'spawn')
+        .mockImplementation((_exe: unknown, _args: unknown, opts: { env?: Record<string, string> }) => {
+          capturedEnv = opts.env;
+          return { on: jest.fn(), kill: jest.fn(), killed: false, exitCode: null };
+        });
+      const waitSpy = jest.spyOn(hubManager as any, 'waitForPort').mockResolvedValue(undefined);
+
+      try {
+        await hubManager.startHub('/bin/agy', '/test/vault', 42500, 'env-profile');
+        expect(capturedEnv?.AGY_ENABLE_HUB).toBe('1');
+        expect(capturedEnv?.AGY_REQUIRE_AUTHENTICATED_UI_BOOTSTRAP).toBeUndefined();
+        expect(capturedEnv?.ANTIGRAVITY_VSCODE_HOST).toBeUndefined();
+      } finally {
+        if (prevBootstrap !== undefined) process.env.AGY_REQUIRE_AUTHENTICATED_UI_BOOTSTRAP = prevBootstrap;
+        if (prevVscode !== undefined) process.env.ANTIGRAVITY_VSCODE_HOST = prevVscode;
+        waitSpy.mockRestore();
+        spawnSpy.mockRestore();
+      }
+    });
+
+    it('mints #t= from daemon/hub_<port>.json + POST /auth/mint, refreshes single-use tokens, and handles stop races', async () => {
+      let mintCalls = 0;
+      let holdNextMint = false;
+      let releaseMint: () => void = () => {};
+      let mintInFlight = false;
+      const receivedCsrf: Array<string | undefined> = [];
+
+      await withMockMintHub(
+        44556,
+        (req, res) => {
+          if (req.method === 'POST' && req.url === '/auth/mint') {
+            const csrf = req.headers['x-codeium-csrf-token'];
+            receivedCsrf.push(typeof csrf === 'string' ? csrf : undefined);
+            const respond = () => {
+              if (csrf === 'valid-daemon-csrf') {
+                mintCalls += 1;
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ bootstrapToken: `minted-boot-tok-${mintCalls}` }));
+              } else {
+                res.writeHead(401);
+                res.end('Unauthorized');
+              }
+            };
+            if (holdNextMint) {
+              mintInFlight = true;
+              releaseMint = respond;
+            } else {
+              respond();
+            }
+            return;
+          }
+          res.writeHead(200);
+          res.end('ok');
+        },
+        async ({ manager, port, writeDiscovery }) => {
+          // Stale discovery file with wrong PID must be ignored until matching PID appears
+          writeDiscovery('win-hub-profile', { pid: 99999, httpPort: port, csrfToken: 'stale-csrf' });
+
+          const startPromise = manager.startHub('/bin/agy', '/test/vault', port, 'win-hub-profile');
+          setTimeout(() => {
+            writeDiscovery('win-hub-profile', { pid: 44556, httpPort: port, csrfToken: 'valid-daemon-csrf' });
+          }, 50);
+
+          expect(await startPromise).toContain('#t=minted-boot-tok-1');
+          expect(receivedCsrf).toEqual(['valid-daemon-csrf']);
+
+          // External browser mints a fresh token without clobbering startup bootstrapToken
+          const browserUrl = await manager.getAuthenticatedHubUrl({ hostTheme: 'dark' });
+          expect(browserUrl).toContain('hostTheme=dark');
+          expect(browserUrl).toContain('#t=minted-boot-tok-2');
+          expect(manager.getHubUrl()).toContain('#t=minted-boot-tok-1');
+
+          // Stopping while /auth/mint is in flight must return '' (never port=null)
+          holdNextMint = true;
+          const racePromise = manager.getAuthenticatedHubUrl({ hostTheme: 'dark' });
+          while (!mintInFlight) {
+            await new Promise((r) => setImmediate(r));
+          }
+          manager.stopHub();
+          releaseMint();
+          expect(await racePromise).toBe('');
+          expect(await manager.getAuthenticatedHubUrl()).toBe('');
+        },
+      );
+    });
+
+    it('stops discovery polling on 404 from /auth/mint and does not overwrite a winning stdout token', async () => {
+      let mintHits = 0;
+      await withMockMintHub(
+        55667,
+        (req, res) => {
+          if (req.url === '/auth/mint') {
+            mintHits += 1;
+            res.writeHead(404);
+            res.end('Not Found');
+            return;
+          }
+          res.writeHead(200);
+          res.end('ok');
+        },
+        async ({ manager, port, writeDiscovery }) => {
+          writeDiscovery('legacy-win-profile', { pid: 55667, httpPort: port, csrfToken: 'legacy-csrf' });
+          const url = await manager.startHub('/bin/agy', '/test/vault', port, 'legacy-win-profile');
+          expect(url).not.toContain('#t=');
+          expect(mintHits).toBe(1);
+        },
+      );
+
+      // Late /auth/mint must not overwrite a token already captured from stdout
+      let releaseMint: () => void = () => {};
+      let mintStarted = false;
+      await withMockMintHub(
+        77889,
+        (req, res) => {
+          if (req.url === '/auth/mint') {
+            mintStarted = true;
+            releaseMint = () => {
+              res.writeHead(200, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ bootstrapToken: 'late-minted-tok' }));
+            };
+            return;
+          }
+          res.writeHead(200);
+          res.end('ok');
+        },
+        async ({ manager, port, stdout, writeDiscovery }) => {
+          writeDiscovery('stdout-win-profile', { pid: 77889, httpPort: port, csrfToken: 'stdout-csrf' });
+          const startPromise = manager.startHub('/bin/agy', '/test/vault', port, 'stdout-win-profile');
+          while (!mintStarted) {
+            await new Promise((r) => setImmediate(r));
+          }
+          stdout.emit('data', Buffer.from(`http://127.0.0.1:${port}/#t=stdout-winning-tok\n`));
+          expect(await startPromise).toContain('#t=stdout-winning-tok');
+          releaseMint();
+          await new Promise((r) => setTimeout(r, 30));
+          expect(manager.getHubUrl()).toContain('#t=stdout-winning-tok');
+        },
+      );
+    });
+
+    it('exits waitForBootstrapToken promptly on cancellation regardless of platform', async () => {
+      const origPlatform = process.platform;
+      const fakeChild = { on: jest.fn(), off: jest.fn(), killed: false, exitCode: null } as any;
+      let cancelled = false;
+      try {
+        Object.defineProperty(process, 'platform', { value: 'linux' });
+        const start = Date.now();
+        await (hubManager as any).waitForBootstrapToken(
+          fakeChild,
+          () => null,
+          jest.fn(),
+          5000,
+          async () => {
+            cancelled = true;
+            return true;
+          },
+          () => cancelled,
+        );
+        expect(Date.now() - start).toBeLessThan(500);
+      } finally {
+        Object.defineProperty(process, 'platform', { value: origPlatform });
+      }
     });
   });
 

@@ -57,7 +57,7 @@ Unit tests mirror `src/` under `tests/unit/`.
 2. **Project Auto-Registration & Collision Resistance**:
    - Vault projects are registered under `~/.gemini/config/projects/obsidian-${cleanName}-${hash}.json` linking `file://${vaultPath}`.
    - The 8-character SHA256 path hash guarantees distinct project configurations for different vaults with identical folder names.
-   - Hub URLs explicitly specify `?section=${projectId}&hostTheme=${theme}&useWebSocket=true` (plus `#t=<token>` when emitted by `agy --hub` for authenticated UI bootstrap) to ensure the correct workspace and session are loaded on boot.
+   - Hub URLs explicitly specify `?section=${projectId}&hostTheme=${theme}&useWebSocket=true` (plus `#t=<token>` for authenticated UI bootstrap—captured from `agy --hub` stdout when emitted, or minted via `POST /auth/mint` using `~/.gemini/<profile>/daemon/hub_<port>.json` when stdout is silent on Windows or when opening a fresh external browser session) to ensure the correct workspace and session are loaded on boot.
 
 3. **Task Execution & Permission Safety Gating**:
    - Discrete tasks execute via official `agy --print <prompt> --output-format stream-json --add-dir <vaultPath>`.

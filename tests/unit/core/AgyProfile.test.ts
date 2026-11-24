@@ -9,7 +9,9 @@ import {
   ensureProfileOnboarding,
   ensureProfileSettings,
   ensureVaultProject,
+  getHubDiscoveryFilePath,
   getHubInstanceFilePath,
+  loadHubDiscoveryMetadata,
   loadHubInstanceMetadata,
   pathToFolderUri,
   removeHubInstanceMetadata,
@@ -405,6 +407,50 @@ describe('AgyProfile', () => {
       fs.writeFileSync(filePath, 'not json');
 
       expect(loadHubInstanceMetadata('test-profile', tmpDir)).toBeNull();
+    });
+  });
+
+  describe('Hub daemon discovery metadata', () => {
+    let tmpDir: string;
+
+    beforeEach(() => {
+      tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agy-discovery-test-'));
+    });
+
+    afterEach(() => {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    it('loads valid daemon/hub_<port>.json with sanitized profile and rejects stale or malformed entries', () => {
+      const filePath = getHubDiscoveryFilePath('../../win-profile!', 51418, tmpDir);
+      expect(filePath).toBe(path.join(tmpDir, '.gemini', 'win-profile', 'daemon', 'hub_51418.json'));
+
+      fs.mkdirSync(path.dirname(filePath), { recursive: true });
+      fs.writeFileSync(
+        filePath,
+        JSON.stringify({ pid: 18552, httpPort: 51418, csrfToken: '  csrf-uuid-1234  ' }),
+      );
+      expect(loadHubDiscoveryMetadata('../../win-profile!', 51418, 18552, tmpDir)).toEqual({
+        pid: 18552,
+        httpPort: 51418,
+        csrfToken: 'csrf-uuid-1234',
+      });
+
+      // Mismatched expectedPid and invalid port numbers
+      expect(loadHubDiscoveryMetadata('win-profile', 51418, 22222, tmpDir)).toBeNull();
+      expect(loadHubDiscoveryMetadata('win-profile', 0, 18552, tmpDir)).toBeNull();
+      expect(loadHubDiscoveryMetadata('win-profile', 70000, 18552, tmpDir)).toBeNull();
+
+      // Mismatched httpPort, non-positive pid, empty or CR/LF csrfToken
+      for (const bad of [
+        { pid: 22222, httpPort: 9999, csrfToken: 'csrf-tok' },
+        { pid: 0, httpPort: 51418, csrfToken: 'csrf-tok' },
+        { pid: 22222, httpPort: 51418, csrfToken: '   ' },
+        { pid: 22222, httpPort: 51418, csrfToken: 'bad\r\ntoken' },
+      ]) {
+        fs.writeFileSync(filePath, JSON.stringify(bad));
+        expect(loadHubDiscoveryMetadata('win-profile', 51418, undefined, tmpDir)).toBeNull();
+      }
     });
   });
 

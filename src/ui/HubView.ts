@@ -47,12 +47,7 @@ export class HubView extends ItemView {
     });
 
     this.addAction('external-link', t('hubView.openBrowserAction'), () => {
-      const url = this.getThemedHubUrl();
-      if (url) {
-        (typeof activeWindow !== 'undefined' ? activeWindow : window).open(url, '_blank');
-      } else {
-        new Notice(t('hubView.notRunningNotice'));
-      }
+      void this.openInExternalBrowser();
     });
   }
 
@@ -138,11 +133,24 @@ export class HubView extends ItemView {
     }
   }
 
-  private getThemedHubUrl(): string {
+  private getHostTheme(): 'dark' | 'light' {
     const isDark = typeof activeDocument !== 'undefined'
       ? activeDocument.body.classList.contains('theme-dark')
       : (typeof document !== 'undefined' && document.body.classList.contains('theme-dark'));
-    return this.hubManager.getHubUrl({ hostTheme: isDark ? 'dark' : 'light' });
+    return isDark ? 'dark' : 'light';
+  }
+
+  private getThemedHubUrl(): string {
+    return this.hubManager.getHubUrl({ hostTheme: this.getHostTheme() });
+  }
+
+  private async openInExternalBrowser(): Promise<void> {
+    const url = await this.hubManager.getAuthenticatedHubUrl({ hostTheme: this.getHostTheme() });
+    if (url) {
+      (typeof activeWindow !== 'undefined' ? activeWindow : window).open(url, '_blank');
+    } else {
+      new Notice(t('hubView.notRunningNotice'));
+    }
   }
 
   refreshHub(): void {
