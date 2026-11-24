@@ -8,6 +8,7 @@ import {
   ensureDefaultProjectId,
   ensureProfileInitialized,
   ensureVaultProject,
+  hasHubDiscoveryDir,
   loadHubDiscoveryMetadata,
   loadHubInstanceMetadata,
   removeHubInstanceMetadata,
@@ -51,6 +52,13 @@ const WINDOWS_BOOTSTRAP_TOKEN_WAIT_MS = 3000;
 
 /** Interval between `daemon/hub_<port>.json` discovery checks while waiting for bootstrap. */
 const DISCOVERY_POLL_INTERVAL_MS = 100;
+
+/**
+ * How many `POST /auth/mint` attempts one hub start may spend before giving up.
+ * A token rejected by the daemon stays rejected, so retrying it is pointless;
+ * the cap keeps a rejected token from turning into a request storm.
+ */
+const MAX_MINT_ATTEMPTS = 3;
 
 /** Maximum length of a trailing partial stdout line kept while scanning for `#t=`. */
 const STDOUT_LINE_BUFFER_LIMIT = 4096;
@@ -162,7 +170,7 @@ export class AgyHubManager {
       const generation = this.startGeneration;
 
       // Terminate any stale/orphan hub processes for this profile from previous sessions or crashes
-      await this.performCleanupStaleHubs(safeProfile);
+      await this.performCleanupStaleHubs(safeProfile, this.homeDir);
 
       if (generation !== this.startGeneration) {
         throw new Error('Antigravity hub start was cancelled.');
@@ -178,9 +186,9 @@ export class AgyHubManager {
         throw new Error('Antigravity hub start was cancelled.');
       }
 
-      const projectId = ensureVaultProject(vaultPath);
-      ensureDefaultProjectId(safeProfile, projectId);
-      const isAuthed = ensureProfileInitialized(safeProfile, vaultPath);
+      const projectId = ensureVaultProject(vaultPath, this.homeDir);
+      ensureDefaultProjectId(safeProfile, projectId, this.homeDir);
+      const isAuthed = ensureProfileInitialized(safeProfile, vaultPath, this.homeDir);
       if (!isAuthed) {
         new Notice(t('errors.notAuthenticated'));
       }
@@ -226,7 +234,7 @@ export class AgyHubManager {
           vaultPath,
           dangerouslySkipPermissions,
           startedAt: Date.now(),
-        });
+        }, this.homeDir);
       }
 
       // The hub is a long-lived daemon that logs continuously. A 'pipe' stream
@@ -283,7 +291,7 @@ export class AgyHubManager {
       child.on('exit', () => {
         if (this.hubProcess === child) {
           if (this.currentProfile) {
-            removeHubInstanceMetadata(this.currentProfile);
+            removeHubInstanceMetadata(this.currentProfile, this.homeDir);
           }
           this.hubProcess = null;
           this.port = null;
@@ -310,7 +318,7 @@ export class AgyHubManager {
           });
         } catch (err) {
           const detail = this.getRecentOutput();
-          removeHubInstanceMetadata(safeProfile);
+          removeHubInstanceMetadata(safeProfile, this.homeDir);
           AgyProcess.killProcess(child, true);
           this.recentOutput = [];
 
@@ -324,24 +332,42 @@ export class AgyHubManager {
 
         if (generation !== this.startGeneration) {
           // stopHub ran while we were waiting; don't resurrect an orphan daemon.
-          removeHubInstanceMetadata(safeProfile);
+          removeHubInstanceMetadata(safeProfile, this.homeDir);
           AgyProcess.killProcess(child, true);
           throw new Error('Antigravity hub start was cancelled.');
         }
 
         if (!capturedBootstrapToken && child.stdout) {
           const pid = child.pid;
+          let discoveredCsrfToken: string | null = null;
+          let mintAttempts = 0;
+          const discoveryPollStart = Date.now();
           const tryDiscoveryMint =
             typeof pid === 'number'
               ? async (): Promise<boolean> => {
                   if (generation !== this.startGeneration || capturedBootstrapToken) {
                     return true;
                   }
-                  const discovery = loadHubDiscoveryMetadata(safeProfile, port, pid, this.homeDir);
-                  if (!discovery) {
-                    return false;
+                  if (!discoveredCsrfToken) {
+                    // Re-read until a file with a matching PID appears, so a stale
+                    // discovery file from a previous daemon is skipped rather than cached.
+                    const discovery = loadHubDiscoveryMetadata(safeProfile, port, pid, this.homeDir);
+                    if (!discovery) {
+                      // Older CLI builds never create the discovery directory. Stop
+                      // after the historical stdout budget instead of burning the
+                      // longer Windows timeout on a token that cannot arrive.
+                      return (
+                        Date.now() - discoveryPollStart >= BOOTSTRAP_TOKEN_WAIT_MS &&
+                        !hasHubDiscoveryDir(safeProfile, this.homeDir)
+                      );
+                    }
+                    discoveredCsrfToken = discovery.csrfToken;
                   }
-                  const minted = await this.mintBootstrapToken(port, discovery.csrfToken);
+                  if (mintAttempts >= MAX_MINT_ATTEMPTS) {
+                    return true;
+                  }
+                  mintAttempts += 1;
+                  const minted = await this.mintBootstrapToken(port, discoveredCsrfToken);
                   if (generation !== this.startGeneration || capturedBootstrapToken) {
                     return true;
                   }
@@ -352,6 +378,8 @@ export class AgyHubManager {
                     }
                     return true;
                   }
+                  // `unsupported` (404/405) means the endpoint is absent; a rejected
+                  // token is equally terminal, so both stop the poll without retrying.
                   return Boolean(minted.unsupported);
                 }
               : undefined;
@@ -370,7 +398,7 @@ export class AgyHubManager {
 
         if (generation !== this.startGeneration) {
           // stopHub ran while we were waiting for the bootstrap token; don't resurrect an orphan daemon.
-          removeHubInstanceMetadata(safeProfile);
+          removeHubInstanceMetadata(safeProfile, this.homeDir);
           AgyProcess.killProcess(child, true);
           throw new Error('Antigravity hub start was cancelled.');
         }
@@ -581,7 +609,7 @@ export class AgyHubManager {
    * Discovers and cleans up stale/orphaned hub processes for this profile from previous sessions.
    * Serialized with startHub via startMutex so cleanup cannot race with and kill a newly spawned hub.
    */
-  cleanupStaleHubs(profile: string, homeDir: string = os.homedir()): Promise<void> {
+  cleanupStaleHubs(profile: string, homeDir: string = this.homeDir): Promise<void> {
     const cleanupPromise = (async () => {
       await this.startMutex;
       await this.performCleanupStaleHubs(profile, homeDir);
@@ -595,7 +623,7 @@ export class AgyHubManager {
     return cleanupPromise;
   }
 
-  private async performCleanupStaleHubs(profile: string, homeDir: string = os.homedir()): Promise<void> {
+  private async performCleanupStaleHubs(profile: string, homeDir: string = this.homeDir): Promise<void> {
     const safeProfile = sanitizeProfile(profile);
     const verifiedPids = AgyProcess.findAgyHubProcesses(safeProfile);
     const terminatedPids = new Set<number>();
@@ -625,13 +653,13 @@ export class AgyHubManager {
     this.startGeneration++;
     const currentProfile = this.currentProfile;
     if (currentProfile) {
-      removeHubInstanceMetadata(currentProfile);
+      removeHubInstanceMetadata(currentProfile, this.homeDir);
     }
     const spawning = this.spawningProcess;
     this.spawningProcess = null;
     if (spawning) {
       if (spawning.profile !== currentProfile) {
-        removeHubInstanceMetadata(spawning.profile);
+        removeHubInstanceMetadata(spawning.profile, this.homeDir);
       }
       if (spawning.child !== this.hubProcess) {
         if (!this.hubProcess) {
