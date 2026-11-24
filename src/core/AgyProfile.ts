@@ -324,3 +324,47 @@ export function removeHubInstanceMetadata(profile: string, homeDir: string = os.
     // Non-critical
   }
 }
+
+export interface HubDiscoveryMetadata {
+  pid: number;
+  httpPort: number;
+  csrfToken: string;
+}
+
+export function getHubDiscoveryFilePath(
+  profile: string,
+  port: number,
+  homeDir: string = os.homedir(),
+): string {
+  return path.join(homeDir, '.gemini', sanitizeProfile(profile), 'daemon', `hub_${port}.json`);
+}
+
+export function loadHubDiscoveryMetadata(
+  profile: string,
+  port: number,
+  expectedPid?: number,
+  homeDir: string = os.homedir(),
+): HubDiscoveryMetadata | null {
+  if (!Number.isInteger(port) || port <= 0 || port > 65535) {
+    return null;
+  }
+  const raw = readJsonFile<Partial<HubDiscoveryMetadata>>(
+    getHubDiscoveryFilePath(profile, port, homeDir),
+  );
+  if (
+    !raw ||
+    typeof raw.pid !== 'number' ||
+    !Number.isInteger(raw.pid) ||
+    raw.pid <= 0 ||
+    raw.httpPort !== port ||
+    typeof raw.csrfToken !== 'string' ||
+    (expectedPid !== undefined && raw.pid !== expectedPid)
+  ) {
+    return null;
+  }
+  const csrfToken = raw.csrfToken.trim();
+  if (!csrfToken || /[\r\n]/.test(csrfToken)) {
+    return null;
+  }
+  return { pid: raw.pid, httpPort: raw.httpPort, csrfToken };
+}

@@ -1,4 +1,4 @@
-import { App, WorkspaceLeaf } from 'obsidian';
+import { App, Notice, WorkspaceLeaf } from 'obsidian';
 import { AgyHubManager } from '../../../src/core/AgyHubManager';
 import { ANTIGRAVITY_HUB_VIEW_TYPE, HubView } from '../../../src/ui/HubView';
 
@@ -558,5 +558,50 @@ describe('HubView', () => {
     view.onunload();
     await view.onOpen();
     expect(view.registerDomEvent).toHaveBeenCalledTimes(2);
+  });
+
+  it('mints a fresh authenticated URL on Open in browser and notifies when stopped', async () => {
+    const openSpy = jest.fn();
+    (globalThis as { activeWindow?: unknown }).activeWindow = { open: openSpy };
+    (globalThis as { activeDocument?: unknown }).activeDocument = {
+      body: { classList: { contains: (cls: string) => cls === 'theme-dark' } },
+    };
+
+    try {
+      mockHubManager.getAuthenticatedHubUrl = jest
+        .fn()
+        .mockResolvedValueOnce('http://127.0.0.1:4096/?section=test&hostTheme=dark&useWebSocket=true#t=fresh-tok')
+        .mockResolvedValueOnce('');
+
+      const view = new HubView(
+        mockLeaf as WorkspaceLeaf,
+        mockHubManager,
+        () => '/usr/bin/agy',
+        () => '/mock/vault',
+        () => 4096,
+        () => 'antigravity-obsidian',
+      );
+      view.onload();
+
+      const externalLinkCall = (view.addAction as jest.Mock).mock.calls.find(
+        (call) => call[0] === 'external-link',
+      );
+      expect(externalLinkCall).toBeDefined();
+
+      externalLinkCall[2]();
+      await Promise.resolve();
+      expect(mockHubManager.getAuthenticatedHubUrl).toHaveBeenCalledWith({ hostTheme: 'dark' });
+      expect(openSpy).toHaveBeenCalledWith(
+        'http://127.0.0.1:4096/?section=test&hostTheme=dark&useWebSocket=true#t=fresh-tok',
+        '_blank',
+      );
+
+      (Notice as unknown as jest.Mock).mockClear();
+      externalLinkCall[2]();
+      await Promise.resolve();
+      expect(Notice).toHaveBeenCalledTimes(1);
+    } finally {
+      delete (globalThis as { activeWindow?: unknown }).activeWindow;
+    }
   });
 });

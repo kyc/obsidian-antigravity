@@ -8,6 +8,7 @@ import {
   ensureDefaultProjectId,
   ensureProfileInitialized,
   ensureVaultProject,
+  loadHubDiscoveryMetadata,
   loadHubInstanceMetadata,
   removeHubInstanceMetadata,
   sanitizeProfile,
@@ -41,6 +42,15 @@ const HUB_OUTPUT_TAIL_LINES = 50;
 
 /** Maximum time to wait for `agy --hub` to print its `#t=<token>` URL after listening. */
 const BOOTSTRAP_TOKEN_WAIT_MS = 1000;
+
+/**
+ * Maximum time on Windows to wait for `agy.exe --hub` to write `daemon/hub_<port>.json`
+ * and mint a `#t=<bootstrapToken>` via `POST /auth/mint` (`stdout` is silent on Windows).
+ */
+const WINDOWS_BOOTSTRAP_TOKEN_WAIT_MS = 3000;
+
+/** Interval between `daemon/hub_<port>.json` discovery checks while waiting for bootstrap. */
+const DISCOVERY_POLL_INTERVAL_MS = 100;
 
 /** Maximum length of a trailing partial stdout line kept while scanning for `#t=`. */
 const STDOUT_LINE_BUFFER_LIMIT = 4096;
@@ -103,6 +113,8 @@ export class AgyHubManager {
   private recentOutput: string[] = [];
   /** Bumped by stopHub so an in-flight start knows it was cancelled. */
   private startGeneration = 0;
+
+  constructor(private readonly homeDir: string = os.homedir()) {}
 
   async startHub(
     agyExecutable: string,
@@ -318,13 +330,41 @@ export class AgyHubManager {
         }
 
         if (!capturedBootstrapToken && child.stdout) {
+          const pid = child.pid;
+          const tryDiscoveryMint =
+            typeof pid === 'number'
+              ? async (): Promise<boolean> => {
+                  if (generation !== this.startGeneration || capturedBootstrapToken) {
+                    return true;
+                  }
+                  const discovery = loadHubDiscoveryMetadata(safeProfile, port, pid, this.homeDir);
+                  if (!discovery) {
+                    return false;
+                  }
+                  const minted = await this.mintBootstrapToken(port, discovery.csrfToken);
+                  if (generation !== this.startGeneration || capturedBootstrapToken) {
+                    return true;
+                  }
+                  if (minted.token) {
+                    capturedBootstrapToken = minted.token;
+                    if (this.hubProcess === child) {
+                      this.bootstrapToken = minted.token;
+                    }
+                    return true;
+                  }
+                  return Boolean(minted.unsupported);
+                }
+              : undefined;
+
           await this.waitForBootstrapToken(
             child,
             () => capturedBootstrapToken,
             (cb) => {
               bootstrapWaiter = cb;
             },
-            BOOTSTRAP_TOKEN_WAIT_MS,
+            process.platform === 'win32' ? WINDOWS_BOOTSTRAP_TOKEN_WAIT_MS : BOOTSTRAP_TOKEN_WAIT_MS,
+            tryDiscoveryMint,
+            () => generation !== this.startGeneration,
           );
         }
 
@@ -393,6 +433,43 @@ export class AgyHubManager {
       options?.hostTheme,
       this.bootstrapToken,
     );
+  }
+
+  /**
+   * Returns a Hub URL with a freshly minted single-use `#t=<bootstrapToken>`
+   * from `daemon/hub_<port>.json` when available, falling back to `getHubUrl`.
+   */
+  async getAuthenticatedHubUrl(options?: {
+    hostTheme?: 'dark' | 'light';
+    section?: string;
+  }): Promise<string> {
+    if (!this.isRunning() || !this.port || !this.currentProfile) {
+      return this.getHubUrl(options);
+    }
+
+    const activeChild = this.hubProcess;
+    const activePort = this.port;
+    const discovery =
+      typeof activeChild?.pid === 'number'
+        ? loadHubDiscoveryMetadata(this.currentProfile, activePort, activeChild.pid, this.homeDir)
+        : null;
+
+    if (discovery) {
+      const minted = await this.mintBootstrapToken(activePort, discovery.csrfToken);
+      if (this.hubProcess !== activeChild || this.port !== activePort || !this.isRunning()) {
+        return this.getHubUrl(options);
+      }
+      if (minted.token) {
+        return this.buildHubUrl(
+          activePort,
+          options?.section || this.currentProjectId,
+          options?.hostTheme,
+          minted.token,
+        );
+      }
+    }
+
+    return this.getHubUrl(options);
   }
 
   private buildHubUrl(
@@ -610,22 +687,28 @@ export class AgyHubManager {
   };
 
   /**
-   * Waits briefly after the HTTP port is listening for `agy --hub` to emit its
-   * `#t=<token>` startup URL on stdout, falling back cleanly on older CLI builds.
+   * Waits after the HTTP port is listening for `agy --hub` to either emit its
+   * `#t=<token>` startup URL on stdout or expose its daemon discovery file
+   * (`daemon/hub_<port>.json`) so a bootstrap token can be minted via `POST /auth/mint`,
+   * falling back cleanly on older CLI builds.
    */
   protected waitForBootstrapToken(
     child: ChildProcess,
     getToken: () => string | null,
     registerWaiter: (cb: () => void) => void,
     timeoutMs: number = BOOTSTRAP_TOKEN_WAIT_MS,
+    pollDiscovery?: () => Promise<boolean>,
+    isCancelled?: () => boolean,
   ): Promise<void> {
-    if (getToken() || child.killed || child.exitCode !== null) {
+    if (getToken() || isCancelled?.() || child.killed || child.exitCode !== null) {
       return Promise.resolve();
     }
 
     return new Promise<void>((resolve) => {
       let settled = false;
       let timer: number | null = null;
+      let pollTimer: number | null = null;
+      let resolvePollWait: (() => void) | null = null;
 
       const finish = (): void => {
         if (settled) return;
@@ -633,6 +716,15 @@ export class AgyHubManager {
         if (timer !== null) {
           window.clearTimeout(timer);
           timer = null;
+        }
+        if (pollTimer !== null) {
+          window.clearTimeout(pollTimer);
+          pollTimer = null;
+        }
+        if (resolvePollWait) {
+          const wake = resolvePollWait;
+          resolvePollWait = null;
+          wake();
         }
         if (typeof child.off === 'function') {
           child.off('exit', finish);
@@ -643,7 +735,7 @@ export class AgyHubManager {
       };
 
       registerWaiter(() => {
-        if (getToken()) {
+        if (getToken() || isCancelled?.()) {
           finish();
         }
       });
@@ -651,9 +743,124 @@ export class AgyHubManager {
       child.on('exit', finish);
       timer = window.setTimeout(finish, timeoutMs);
 
-      if (getToken() || child.killed || child.exitCode !== null) {
+      if (getToken() || isCancelled?.() || child.killed || child.exitCode !== null) {
         finish();
+        return;
       }
+
+      if (pollDiscovery) {
+        void (async () => {
+          while (!settled) {
+            if (isCancelled?.()) {
+              finish();
+              return;
+            }
+            const stopPolling = await pollDiscovery();
+            if (settled || getToken() || isCancelled?.()) {
+              finish();
+              return;
+            }
+            if (stopPolling) {
+              if (process.platform === 'win32') {
+                finish();
+              }
+              return;
+            }
+            await new Promise<void>((r) => {
+              resolvePollWait = r;
+              pollTimer = window.setTimeout(() => {
+                pollTimer = null;
+                resolvePollWait = null;
+                r();
+              }, DISCOVERY_POLL_INTERVAL_MS);
+            });
+          }
+        })();
+      }
+    });
+  }
+
+  /**
+   * Mints a single-use UI bootstrap token (`#t=<bootstrapToken>`) from the local
+   * Hub daemon using the master `csrfToken` from `daemon/hub_<port>.json`.
+   */
+  protected mintBootstrapToken(
+    port: number,
+    csrfToken: string,
+    timeoutMs: number = 1500,
+  ): Promise<{ token: string | null; unsupported?: boolean }> {
+    return new Promise((resolve) => {
+      let req: http.ClientRequest;
+      try {
+        req = http.request(
+          {
+            hostname: '127.0.0.1',
+            port,
+            path: '/auth/mint',
+            method: 'POST',
+            headers: {
+              'x-codeium-csrf-token': csrfToken,
+              'Content-Length': '0',
+            },
+          },
+          (res) => {
+            const status = res.statusCode ?? 0;
+            if (status === 404 || status === 405) {
+              res.resume();
+              resolve({ token: null, unsupported: true });
+              return;
+            }
+            if (status < 200 || status >= 300) {
+              res.resume();
+              resolve({ token: null });
+              return;
+            }
+            const chunks: Buffer[] = [];
+            let totalBytes = 0;
+            res.on('data', (chunk: Buffer) => {
+              totalBytes += chunk.length;
+              if (totalBytes <= 4096) {
+                chunks.push(chunk);
+              } else {
+                res.destroy();
+                resolve({ token: null });
+              }
+            });
+            res.on('end', () => {
+              if (totalBytes > 4096) {
+                resolve({ token: null });
+                return;
+              }
+              try {
+                const raw: unknown = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+                if (
+                  typeof raw === 'object' &&
+                  raw !== null &&
+                  'bootstrapToken' in raw &&
+                  typeof raw.bootstrapToken === 'string'
+                ) {
+                  const token = raw.bootstrapToken.trim();
+                  resolve({ token: token || null });
+                  return;
+                }
+              } catch {
+                // Ignore malformed JSON response
+              }
+              resolve({ token: null });
+            });
+            res.on('error', () => resolve({ token: null }));
+          },
+        );
+      } catch {
+        resolve({ token: null });
+        return;
+      }
+      req.on('error', () => resolve({ token: null }));
+      req.setTimeout(timeoutMs, () => {
+        req.destroy();
+        resolve({ token: null });
+      });
+      req.end();
     });
   }
 
