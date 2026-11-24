@@ -339,6 +339,20 @@ export function getHubDiscoveryFilePath(
   return path.join(homeDir, '.gemini', sanitizeProfile(profile), 'daemon', `hub_${port}.json`);
 }
 
+/**
+ * Whether the daemon discovery directory exists for this profile.
+ * Newer CLI builds create it before writing `hub_<port>.json`; builds that predate
+ * the discovery file never create it, which lets startup converge early instead of
+ * burning the full bootstrap wait.
+ */
+export function hasHubDiscoveryDir(profile: string, homeDir: string = os.homedir()): boolean {
+  try {
+    return fs.existsSync(path.dirname(getHubDiscoveryFilePath(profile, 0, homeDir)));
+  } catch {
+    return false;
+  }
+}
+
 export function loadHubDiscoveryMetadata(
   profile: string,
   port: number,

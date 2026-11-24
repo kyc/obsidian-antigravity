@@ -602,6 +602,7 @@ describe('HubView', () => {
       expect(Notice).toHaveBeenCalledTimes(1);
     } finally {
       delete (globalThis as { activeWindow?: unknown }).activeWindow;
+      delete (globalThis as { activeDocument?: unknown }).activeDocument;
     }
   });
 });

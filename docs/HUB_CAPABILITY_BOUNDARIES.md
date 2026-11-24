@@ -23,6 +23,7 @@
 | 官方如何注入上下文 | **protobuf + RPC over WebSocket**（`useWebSocket=true`） |
 | 能否用 URL 预填 prompt | **不能**。URL 只能指定路由与工作区，注入上下文必须走 WebSocket RPC |
 | 插件能否复用该 RPC | **理论上可以，但代价高**：需实现 protobuf schema + WebSocket 握手，且依赖未公开协议 |
+| UI 启动鉴权 | `#t=<bootstrapToken>` 为**一次性**令牌；`agy` 新版本在 Windows 上不打印该 URL，改为写入 `~/.gemini/<profile>/daemon/hub_<port>.json`，需经 `POST /auth/mint` 换取（2026-11 补充，详见 §3.1） |
 
 **对三条链路去留的影响**：Hub 轨是唯一能拿到官方完整能力的通道；Chat 轨受 `agy` CLI 的 `stream-json` 能力边界限制（用户已实测并放弃，该轨后续已删除）；Task 轨现为唯一的「带指令执行」通道。**Hub 无法通过 URL 预填 prompt** 这一点，直接决定了「其他命令改为唤起 Hub 执行」的方案不可行——详见 §5。这也正是 Task 轨必须保留的根本原因。
 
@@ -130,6 +131,41 @@ if (child && (child.killed || child.exitCode !== null)) {
 }
 ```
 此设计值得肯定。但**官方 stdout 信号更精确**，且可顺带捕获 `ANTIGRAVITY_OPEN_URL:`（认证 URL）——插件当前未利用该信号，遇认证流程时无法主动引导用户。
+
+### 3.1 UI 启动鉴权契约：`#t=` 一次性令牌与 `/auth/mint`（2026-11 补充实测）
+
+> 调查对象：`agy` v1.5.12+（Windows 实测 v1.5.14 / LS `2.34.0`），对应 [#7](https://github.com/kyc/obsidian-antigravity/issues/7) / [#8](https://github.com/kyc/obsidian-antigravity/pull/8)。
+
+Hub 前端在挂载 `#root` 之前要求持有 LS CSRF 会话；缺失时直接抛出 `Error: Missing LS CSRF token cookie`。引导方式有两种，**stdout 已不再是唯一来源**：
+
+| 通道 | 契约 | 平台表现 |
+| :--- | :--- | :--- |
+| stdout | `agy --hub` 打印 `http://127.0.0.1:<port>/#t=<bootstrapToken>` | macOS / Linux 正常；**Windows 静默** |
+| 发现文件 + RPC | `~/.gemini/<profile>/daemon/hub_<port>.json` → `POST /auth/mint` | Windows 唯一可靠来源 |
+
+**发现文件结构**（字段宽松解析，仅校验收到的字段）：
+
+```json
+{ "pid": 18552, "httpPort": 51418, "httpsPort": 51420, "lsVersion": "2.34.0", "csrfToken": "<master csrf>" }
+```
+
+**铸签请求**：
+
+```http
+POST http://127.0.0.1:<port>/auth/mint
+x-codeium-csrf-token: <csrfToken>
+Content-Length: 0
+
+→ 200 { "bootstrapToken": "<single-use token>" }
+```
+
+关键性质与实现约束：
+
+1. **`#t=` 令牌是一次性的**：`POST /auth` 在首次交换时即消费该令牌。因此**不可复用**启动令牌去开新的浏览器会话——「在浏览器中打开」必须现铸一枚（`AgyHubManager.getAuthenticatedHubUrl()`）。内嵌 `<webview>` 因 `partition="persist:antigravity-${profile}"` 保留 Cookie，重复加载不需重新引导。
+2. **发现文件必须校验身份**：`pid === child.pid` 且 `httpPort === port`，否则会把上一代 daemon 的陈旧文件当成有效凭据（`loadHubDiscoveryMetadata()`）。profile 名经 `sanitizeProfile()` 处理，端口必须是正整数，杜绝路径穿越。
+3. **`/auth/mint` 属未公开端点**：`404` / `405` 视为该 CLI 构建无此端点，立即停止轮询并退回「无令牌 URL」（`hubView` 侧仍可用）。令牌被拒（`401` / `403`）同样终止重试，且单次启动最多尝试 3 次，避免请求风暴。
+4. **不引入任何环境变量旁路**：早期方案曾考虑 `AGY_REQUIRE_AUTHENTICATED_UI_BOOTSTRAP=0` 或伪造 `ANTIGRAVITY_VSCODE_HOST=1`，均已否决——前者会在全平台削弱真启用中的鉴权引导，后者依赖 IDE 内部信号。当前实现对全部平台一律保留鉴权引导。
+5. **等待预算**：先按历史 1000ms 等 stdout；Windows 放宽到 3000ms 以等待 `daemon/hub_<port>.json` 落盘。若发现目录本身始终不存在（早于发现文件机制的旧构建），则在 1000ms 后提前收敛，不空耗 3s。
 
 ---
 

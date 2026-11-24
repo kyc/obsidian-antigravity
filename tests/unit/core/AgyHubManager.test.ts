@@ -14,13 +14,18 @@ import {
 
 describe('AgyHubManager', () => {
   let hubManager: AgyHubManager;
+  let tmpHome: string;
 
   beforeEach(() => {
-    hubManager = new AgyHubManager();
+    // Every manager instance is pinned to a throwaway home so hub startup never
+    // writes ~/.gemini on the machine running the suite.
+    tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'agy-hub-manager-test-'));
+    hubManager = new AgyHubManager(tmpHome);
   });
 
   afterEach(() => {
     hubManager.stopHub();
+    fs.rmSync(tmpHome, { recursive: true, force: true });
   });
 
   describe('getHubUrl', () => {
@@ -569,7 +574,7 @@ describe('AgyHubManager', () => {
       hubManager.stopHub();
       expect(killProcessSpy).toHaveBeenCalledWith(fakeChild, true);
       expect(capturedIsCancelled?.()).toBe(true);
-      expect(loadHubInstanceMetadata('mid-spawn-cancel')).toBeNull();
+      expect(loadHubInstanceMetadata('mid-spawn-cancel', tmpHome)).toBeNull();
 
       releaseProbe();
       await expect(startPromise).rejects.toThrow(/cancelled/i);
@@ -864,6 +869,62 @@ describe('AgyHubManager', () => {
           expect(manager.getHubUrl()).toContain('#t=stdout-winning-tok');
         },
       );
+    });
+
+    it('caps /auth/mint retries when the daemon keeps rejecting the token', async () => {
+      let mintHits = 0;
+      await withMockMintHub(
+        66778,
+        (req, res) => {
+          if (req.url === '/auth/mint') {
+            mintHits += 1;
+            res.writeHead(401);
+            res.end('Unauthorized');
+            return;
+          }
+          res.writeHead(200);
+          res.end('ok');
+        },
+        async ({ manager, port, writeDiscovery }) => {
+          writeDiscovery('reject-win-profile', { pid: 66778, httpPort: port, csrfToken: 'rejected-csrf' });
+          const startedAt = Date.now();
+          const url = await manager.startHub('/bin/agy', '/test/vault', port, 'reject-win-profile');
+
+          // A rejected token stays rejected: no request storm, no token in the URL.
+          expect(mintHits).toBe(3);
+          expect(url).not.toContain('#t=');
+          // Minting stops, but the platform keeps waiting out the stdout budget
+          // so a `#t=` that arrives late on stdout is still captured.
+          expect(Date.now() - startedAt).toBeLessThan(1500);
+        },
+      );
+    });
+
+    it('converges after the stdout budget when the CLI never creates the discovery directory', async () => {
+      const origPlatform = process.platform;
+      try {
+        Object.defineProperty(process, 'platform', { value: 'win32' });
+        await withMockMintHub(
+          77890,
+          (_req, res) => {
+            res.writeHead(200);
+            res.end('ok');
+          },
+          async ({ manager, port }) => {
+            // No discovery file is ever written: a pre-discovery CLI build on Windows.
+            const startedAt = Date.now();
+            const url = await manager.startHub('/bin/agy', '/test/vault', port, 'legacy-no-discovery');
+            const elapsed = Date.now() - startedAt;
+
+            expect(url).not.toContain('#t=');
+            // Must not burn the full 3s Windows budget on a token that cannot arrive.
+            expect(elapsed).toBeGreaterThanOrEqual(900);
+            expect(elapsed).toBeLessThan(2000);
+          },
+        );
+      } finally {
+        Object.defineProperty(process, 'platform', { value: origPlatform });
+      }
     });
 
     it('exits waitForBootstrapToken promptly on cancellation regardless of platform', async () => {

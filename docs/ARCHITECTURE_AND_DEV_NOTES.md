@@ -64,7 +64,8 @@ flowchart TD
 ### 3.1 规避 Extension 桥接白屏悬挂与 Electron `<webview>` 鉴权接入
 - **踩坑现象**：早期尝试使用 `/?extensionView=true` 配合 `<iframe>` 陷入无止境的空白加载状态；后续 Antigravity 1.5+ Hub 引入启动鉴权令牌（`#t=<token>`）与跨源安全头限制，普通 `<iframe>` 无法完成会话引导。
 - **根本原因**：`agy --hub` 前端在检测到 `extensionView` 时会挂起等待 VS Code RPC 握手信号；同时新版本 Hub 要求携带启动横幅输出的 `#t=<token>` 并维护独立 Cookie/Storage 分区。
-- **解决方案**：在 [src/ui/HubView.ts](../src/ui/HubView.ts) 中采用 Electron `<webview>`（独立 `partition="persist:antigravity-${profile}"`）以纯 Web 模式接入，剔除所有 extension 桥接参数。`AgyHubManager` 从 `agy --hub` stdout 捕获 `#t=<token>`（诊断日志中自动脱敏为 `#t=[REDACTED]`），构造标准 URL：`http://127.0.0.1:${port}/?section=${projectId}&hostTheme=${theme}&useWebSocket=true#t=${token}`（旧版 CLI 未输出 token 时自动平滑降级）。
+- **解决方案**：在 [src/ui/HubView.ts](../src/ui/HubView.ts) 中采用 Electron `<webview>`（独立 `partition="persist:antigravity-${profile}"`）以纯 Web 模式接入，剔除所有 extension 桥接参数。`AgyHubManager` 从 `agy --hub` stdout 捕获 `#t=<token>`（诊断日志中自动脱敏为 `#t=[REDACTED]`），构造标准 URL：`http://127.0.0.1:${port}/?section=${projectId}&hostTheme=${theme}&useWebSocket=true#t=${token}`。
+- **后续补强（2026-11）**：Windows 上 `agy.exe --hub` 不打印该 URL，改为写入 `~/.gemini/<profile>/daemon/hub_<port>.json`；插件在 stdout 静默时读取该发现文件，并以 `POST /auth/mint` 现铸一枚**一次性** `#t=` 令牌。因此「在浏览器中打开」不再复用启动令牌（已被 `POST /auth` 消费），而是每次重新铸取。端点缺失（`404`/`405`）或令牌被拒时平滑退回无令牌 URL，契约细节见 [HUB_CAPABILITY_BOUNDARIES.md](./HUB_CAPABILITY_BOUNDARIES.md) §3.1。
 
 ### 3.2 并发防抖与跨 Profile 启动锁 (`inFlightStart` & `startMutex`)
 - **踩坑现象**：多标签页或快速重连并发调用 `startHub` 时，可能出现进程竞争、端口冲突、旧进程被杀或启动期陈旧实例清理误杀刚拉起的新 Hub。
