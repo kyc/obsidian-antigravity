@@ -126,6 +126,7 @@ export class ItemView {
         }),
         getAttribute: jest.fn((key: string) => el.attributes[key] ?? null),
         addEventListener: jest.fn(),
+        removeEventListener: jest.fn(),
         createDiv: jest.fn((childOpts?: any) => {
           const normalized = typeof childOpts === 'string' ? { cls: childOpts } : childOpts;
           return el.createEl('div', normalized);
@@ -229,11 +230,14 @@ export class App {
     create: jest.fn().mockResolvedValue(undefined),
     append: jest.fn().mockResolvedValue(undefined),
     getAbstractFileByPath: jest.fn().mockReturnValue(null),
+    getFiles: jest.fn().mockReturnValue([]),
   };
   workspace: any = {
     layoutReady: true,
+    rootSplit: {},
     onLayoutReady: jest.fn().mockImplementation((cb: () => any) => cb()),
     getLeavesOfType: jest.fn().mockReturnValue([]),
+    iterateAllLeaves: jest.fn(),
     getActiveViewOfType: jest.fn().mockReturnValue(null),
     getMostRecentLeaf: jest.fn().mockReturnValue(null),
     getRightLeaf: jest.fn().mockReturnValue({
@@ -244,6 +248,8 @@ export class App {
     }),
     getLeaf: jest.fn().mockReturnValue({
       setViewState: jest.fn().mockResolvedValue(undefined),
+      openFile: jest.fn().mockResolvedValue(undefined),
+      getRoot: jest.fn(),
     }),
     setActiveLeaf: jest.fn(),
     revealLeaf: jest.fn(),

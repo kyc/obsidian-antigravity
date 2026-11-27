@@ -1,4 +1,4 @@
-import { App, Notice, WorkspaceLeaf } from 'obsidian';
+import { App, Notice, TFile, TFolder, WorkspaceLeaf } from 'obsidian';
 import { AgyHubManager } from '../../../src/core/AgyHubManager';
 import { ANTIGRAVITY_HUB_VIEW_TYPE, HubView } from '../../../src/ui/HubView';
 
@@ -604,5 +604,249 @@ describe('HubView', () => {
       delete (globalThis as { activeWindow?: unknown }).activeWindow;
       delete (globalThis as { activeDocument?: unknown }).activeDocument;
     }
+  });
+
+  describe('vault file link interception', () => {
+    function extractBridgePrefix(script: string): string {
+      const parsed = /"messagePrefix":"([^"]+)"/.exec(script);
+      if (!parsed) {
+        throw new Error('Could not find messagePrefix in injected script');
+      }
+      return parsed[1];
+    }
+
+    async function mountBridgeHubView(options?: {
+      vaultPath?: string;
+      getEnabled?: () => boolean;
+      getUrl?: () => string;
+    }) {
+      mockApp.workspace.layoutReady = true;
+      mockHubManager.isRunning = jest.fn().mockReturnValue(true);
+
+      const view = new HubView(
+        mockLeaf as WorkspaceLeaf,
+        mockHubManager,
+        () => '/usr/bin/agy',
+        () => options?.vaultPath ?? '/mock/vault',
+        () => 4096,
+        () => 'antigravity-obsidian',
+        () => '',
+        () => false,
+        () => '',
+        options?.getEnabled ?? (() => true),
+      );
+
+      const listeners: Record<string, Array<(evt: any) => void>> = {};
+      const origCreateEl = view.contentEl.createEl;
+      view.contentEl.createEl = jest.fn((tag: string, opts?: any) => {
+        const el = origCreateEl(tag, opts);
+        if (tag === 'webview') {
+          el.addEventListener = jest.fn((event: string, cb: (evt: any) => void) => {
+            (listeners[event] ||= []).push(cb);
+          });
+          el.removeEventListener = jest.fn((event: string, cb: (evt: any) => void) => {
+            listeners[event] = (listeners[event] || []).filter((fn) => fn !== cb);
+          });
+          el.executeJavaScript = jest.fn().mockResolvedValue(undefined);
+          if (options?.getUrl) {
+            el.getURL = options.getUrl;
+          }
+        }
+        return el;
+      });
+
+      await view.onOpen();
+      await Promise.resolve();
+
+      const webview = view.contentEl.children.find((el: any) => el.tagName === 'WEBVIEW');
+      const emit = (event: string, payload?: any) => {
+        for (const cb of listeners[event] || []) cb(payload);
+      };
+      return { view, webview, emit };
+    }
+
+    it('injects link bridge on dom-ready and opens vault file in a new tab with 0-based line state', async () => {
+      const noteFile = new TFile('Folder/Note 1.md');
+      mockApp.vault.getAbstractFileByPath = jest.fn((p: string) => (p === 'Folder/Note 1.md' ? noteFile : null));
+      const tabLeaf = { openFile: jest.fn().mockResolvedValue(undefined), getRoot: jest.fn() };
+      mockApp.workspace.getLeaf = jest.fn().mockReturnValue(tabLeaf);
+
+      const { webview, emit } = await mountBridgeHubView();
+      emit('dom-ready');
+      expect(webview.executeJavaScript).toHaveBeenCalledTimes(1);
+      const prefix = extractBridgePrefix(webview.executeJavaScript.mock.calls[0][0]);
+
+      emit('console-message', {
+        message: `${prefix}${JSON.stringify({ uri: 'file:///mock/vault/Folder/Note%201.md#L10-L15', newTab: false })}`,
+      });
+      await Promise.resolve();
+
+      expect(mockApp.workspace.getLeaf).toHaveBeenCalledWith('tab');
+      expect(tabLeaf.openFile).toHaveBeenCalledWith(noteFile, { active: true, eState: { line: 9 } });
+      expect(mockApp.workspace.revealLeaf).toHaveBeenCalledWith(tabLeaf);
+    });
+
+    it('reuses an existing main-workspace leaf unless newTab is true, and supports heading subpaths', async () => {
+      const noteFile = new TFile('Guide.md');
+      mockApp.vault.getAbstractFileByPath = jest.fn().mockReturnValue(noteFile);
+
+      const sidebarLeaf = {
+        view: { file: noteFile },
+        getRoot: () => ({ id: 'right-sidebar' }),
+        openFile: jest.fn().mockResolvedValue(undefined),
+      };
+      const mainLeaf = {
+        view: { file: noteFile },
+        getRoot: () => mockApp.workspace.rootSplit,
+        openFile: jest.fn().mockResolvedValue(undefined),
+      };
+      const newTabLeaf = { openFile: jest.fn().mockResolvedValue(undefined), getRoot: () => mockApp.workspace.rootSplit };
+      mockApp.workspace.iterateAllLeaves = jest.fn((cb: (leaf: any) => void) => {
+        cb(sidebarLeaf);
+        cb(mainLeaf);
+      });
+      mockApp.workspace.getLeaf = jest.fn().mockReturnValue(newTabLeaf);
+
+      const { webview, emit } = await mountBridgeHubView();
+      emit('dom-ready');
+      const prefix = extractBridgePrefix(webview.executeJavaScript.mock.calls[0][0]);
+
+      emit('console-message', {
+        message: `${prefix}${JSON.stringify({ uri: 'file:///mock/vault/Guide.md#Overview', newTab: false })}`,
+      });
+      await Promise.resolve();
+      expect(sidebarLeaf.openFile).not.toHaveBeenCalled();
+      expect(mainLeaf.openFile).toHaveBeenCalledWith(noteFile, { active: true, eState: { subpath: '#Overview' } });
+      expect(mockApp.workspace.getLeaf).not.toHaveBeenCalled();
+
+      emit('console-message', {
+        message: `${prefix}${JSON.stringify({ uri: 'file:///mock/vault/Guide.md', newTab: true })}`,
+      });
+      await Promise.resolve();
+      expect(mockApp.workspace.getLeaf).toHaveBeenCalledWith('tab');
+      expect(newTabLeaf.openFile).toHaveBeenCalledWith(noteFile, { active: true });
+    });
+
+    it('falls back to case-insensitive vault lookup on Windows and notifies if missing or folder', async () => {
+      const realFile = new TFile('Notes/DailyNote.md');
+      mockApp.vault.getAbstractFileByPath = jest.fn().mockReturnValue(null);
+      mockApp.vault.getFiles = jest.fn().mockReturnValue([realFile]);
+      const tabLeaf = { openFile: jest.fn().mockResolvedValue(undefined) };
+      mockApp.workspace.getLeaf = jest.fn().mockReturnValue(tabLeaf);
+
+      const { webview, emit } = await mountBridgeHubView({ vaultPath: 'C:\\Users\\Alice\\Vault' });
+      emit('dom-ready');
+      const prefix = extractBridgePrefix(webview.executeJavaScript.mock.calls[0][0]);
+
+      emit('console-message', {
+        message: `${prefix}${JSON.stringify({ uri: 'file:///c%3A/users/alice/vault/notes/dailynote.md', newTab: false })}`,
+      });
+      await Promise.resolve();
+      expect(tabLeaf.openFile).toHaveBeenCalledWith(realFile, { active: true });
+
+      mockApp.vault.getFiles = jest.fn().mockReturnValue([]);
+      (Notice as unknown as jest.Mock).mockClear();
+      emit('console-message', {
+        message: `${prefix}${JSON.stringify({ uri: 'file:///C:/Users/Alice/Vault/Missing.md', newTab: false })}`,
+      });
+      await Promise.resolve();
+      expect(Notice).toHaveBeenCalledTimes(1);
+
+      mockApp.vault.getAbstractFileByPath = jest.fn().mockReturnValue(new TFolder('Notes'));
+      (Notice as unknown as jest.Mock).mockClear();
+      emit('console-message', {
+        message: `${prefix}${JSON.stringify({ uri: 'file:///C:/Users/Alice/Vault/Notes', newTab: false })}`,
+      });
+      await Promise.resolve();
+      expect(Notice).toHaveBeenCalledTimes(1);
+    });
+
+    it('ignores invalid nonces, non-vault URIs, and disabled state, and syncs live without reloading src', async () => {
+      let enabled = true;
+      const { view, webview, emit } = await mountBridgeHubView({ getEnabled: () => enabled });
+      const initialSrc = webview.getAttribute('src');
+      emit('dom-ready');
+      const prefix = extractBridgePrefix(webview.executeJavaScript.mock.calls[0][0]);
+
+      emit('console-message', {
+        message: `__OBSIDIAN_AGY_OPEN_FILE__:badnonce:${JSON.stringify({ uri: 'file:///mock/vault/a.md', newTab: false })}`,
+      });
+      emit('console-message', {
+        message: `${prefix}${JSON.stringify({ uri: 'file:///other/vault/a.md', newTab: false })}`,
+      });
+      expect(mockApp.workspace.getLeaf).not.toHaveBeenCalled();
+
+      enabled = false;
+      view.syncFileLinkInterception();
+      expect(webview.executeJavaScript).toHaveBeenCalledTimes(2);
+      expect(webview.getAttribute('src')).toBe(initialSrc);
+
+      emit('console-message', {
+        message: `${prefix}${JSON.stringify({ uri: 'file:///mock/vault/a.md', newTab: false })}`,
+      });
+      expect(mockApp.workspace.getLeaf).not.toHaveBeenCalled();
+    });
+
+    it('skips injecting bridge on untrusted URLs (about:blank or external origins)', async () => {
+      let currentWebviewUrl = 'about:blank';
+      const { webview, emit } = await mountBridgeHubView({ getUrl: () => currentWebviewUrl });
+
+      emit('dom-ready');
+      expect(webview.executeJavaScript).not.toHaveBeenCalled();
+
+      currentWebviewUrl = 'https://accounts.google.com/o/oauth2/auth';
+      emit('dom-ready');
+      expect(webview.executeJavaScript).not.toHaveBeenCalled();
+
+      currentWebviewUrl = 'http://127.0.0.1:4096/c/conv-1';
+      emit('dom-ready');
+      expect(webview.executeJavaScript).toHaveBeenCalledTimes(1);
+    });
+
+    it('reuses deferred leaves via getViewState and catches openFile rejections with a Notice', async () => {
+      const noteFile = new TFile('Deferred.md');
+      mockApp.vault.getAbstractFileByPath = jest.fn().mockReturnValue(noteFile);
+
+      const deferredLeaf = {
+        view: { getViewType: () => 'markdown' },
+        getRoot: () => mockApp.workspace.rootSplit,
+        getViewState: () => ({ type: 'markdown', state: { file: 'Deferred.md' } }),
+        openFile: jest.fn().mockRejectedValueOnce(new Error('cannot open')).mockResolvedValueOnce(undefined),
+      };
+      mockApp.workspace.iterateAllLeaves = jest.fn((cb: (leaf: any) => void) => cb(deferredLeaf));
+
+      const { webview, emit } = await mountBridgeHubView();
+      emit('dom-ready');
+      const prefix = extractBridgePrefix(webview.executeJavaScript.mock.calls[0][0]);
+
+      (Notice as unknown as jest.Mock).mockClear();
+      emit('console-message', {
+        message: `${prefix}${JSON.stringify({ uri: 'file:///mock/vault/Deferred.md', newTab: false })}`,
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(mockApp.workspace.getLeaf).not.toHaveBeenCalled();
+      expect(deferredLeaf.openFile).toHaveBeenCalledTimes(1);
+      expect(Notice).toHaveBeenCalledTimes(1);
+    });
+
+    it('skips guest injection when disabled by default and injects only once enabled', async () => {
+      let enabled = false;
+      const { view, webview, emit } = await mountBridgeHubView({ getEnabled: () => enabled });
+      const initialSrc = webview.getAttribute('src');
+
+      emit('dom-ready');
+      expect(webview.executeJavaScript).not.toHaveBeenCalled();
+
+      enabled = true;
+      view.syncFileLinkInterception();
+      expect(webview.executeJavaScript).toHaveBeenCalledTimes(1);
+
+      enabled = false;
+      view.syncFileLinkInterception();
+      expect(webview.executeJavaScript).toHaveBeenCalledTimes(2);
+      expect(webview.getAttribute('src')).toBe(initialSrc);
+    });
   });
 });

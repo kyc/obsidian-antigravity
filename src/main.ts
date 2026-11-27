@@ -65,6 +65,7 @@ export default class AntigravityPlugin extends Plugin {
           () => this.settings.defaultAgent,
           () => this.isHubUnrestrictedAllowed(),
           () => this.settings.proxyUrl,
+          () => this.settings.openFileLinksInObsidian,
         ),
     );
 
@@ -278,6 +279,7 @@ export default class AntigravityPlugin extends Plugin {
 
     await this.saveData(this.settings);
     setConfiguredLanguage(this.settings.language);
+    this.syncOpenHubViewsFileLinkInterception();
 
     if (options?.debounceHubRestart) {
       this.clearHubRestartTimer();
@@ -316,6 +318,15 @@ export default class AntigravityPlugin extends Plugin {
     for (const leaf of leaves) {
       if (leaf.view instanceof HubView) {
         leaf.view.refreshHub();
+      }
+    }
+  }
+
+  private syncOpenHubViewsFileLinkInterception(): void {
+    const leaves = this.app?.workspace?.getLeavesOfType?.(ANTIGRAVITY_HUB_VIEW_TYPE) ?? [];
+    for (const leaf of leaves) {
+      if (leaf.view instanceof HubView) {
+        leaf.view.syncFileLinkInterception();
       }
     }
   }

@@ -36,6 +36,14 @@ describe('validateSettings', () => {
     expect(Object.prototype.hasOwnProperty.call(validated, 'effort')).toBe(false);
   });
 
+  it('validates openFileLinksInObsidian boolean and defaults to false', () => {
+    expect(DEFAULT_SETTINGS.openFileLinksInObsidian).toBe(false);
+    expect(validateSettings({}).openFileLinksInObsidian).toBe(false);
+    expect(validateSettings({ openFileLinksInObsidian: 'yes' }).openFileLinksInObsidian).toBe(false);
+    expect(validateSettings({ openFileLinksInObsidian: false }).openFileLinksInObsidian).toBe(false);
+    expect(validateSettings({ openFileLinksInObsidian: true }).openFileLinksInObsidian).toBe(true);
+  });
+
   it('validates autoStartHub boolean and falls back on non-boolean', () => {
     expect(validateSettings({ autoStartHub: 'yes' }).autoStartHub).toBe(false);
     expect(validateSettings({ autoStartHub: 1 }).autoStartHub).toBe(false);
@@ -213,7 +221,7 @@ describe('AntigravitySettingTab', () => {
     clearSpy.mockRestore();
   });
 
-  it('debounces hub restart for text/number hub settings but applies permission toggle immediately', async () => {
+  it('debounces hub restart for text/number hub settings but applies permission and file-link toggles immediately', async () => {
     await tab.setControlValue('proxyUrl', 'http://127.0.0.1:7897');
     expect(mockPlugin.saveSettings).toHaveBeenLastCalledWith({ debounceHubRestart: true });
 
@@ -222,6 +230,16 @@ describe('AntigravitySettingTab', () => {
 
     await tab.setControlValue('allowUnrestrictedTasks', false);
     expect(mockPlugin.saveSettings).toHaveBeenLastCalledWith();
+
+    await tab.setControlValue('openFileLinksInObsidian', false);
+    expect(mockPlugin.saveSettings).toHaveBeenLastCalledWith();
+  });
+
+  it('includes openFileLinksInObsidian toggle in hub settings group', () => {
+    const defs = tab.getSettingDefinitions();
+    const hubGroup = defs.find((d: any) => d.type === 'group' && Array.isArray(d.items)) as any;
+    const linkToggle = hubGroup?.items?.find((item: any) => item.control?.key === 'openFileLinksInObsidian');
+    expect(linkToggle?.control?.type).toBe('toggle');
   });
 });
 

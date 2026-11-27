@@ -60,6 +60,8 @@ const zhCn: LocaleDictionary = {
   'settings.hubPortDesc': '本地 Hub HTTP 服务的端口（设为 0 使用随机空闲端口）',
   'settings.autoStartName': '自动启动 Hub 服务',
   'settings.autoStartDesc': '在 Obsidian 启动时自动运行 Antigravity Hub 后台服务',
+  'settings.openFileLinksInObsidianName': '在 Obsidian 标签页中打开库文件链接',
+  'settings.openFileLinksInObsidianDesc': '点击 Assistant Hub 中的库文件链接时，直接在 Obsidian 标签页中打开，而不是在右侧内嵌面板中预览。按住 Alt 点击仍可使用 Hub 内置预览。',
   'settings.groupRules': '库规范规则',
   'settings.rulesEnableName': '维护库规范规则文件',
   'settings.rulesEnableDesc': '自动创建并注入针对 Obsidian 规范的规则文件（默认 AGENTS.md）',
@@ -79,6 +81,7 @@ const zhCn: LocaleDictionary = {
   'hubView.errVaultPath': '无法确定 Obsidian 库路径。',
   'hubView.errFailedStart': '启动 Hub 失败：{error}',
   'hubView.retryButton': '重试',
+  'hubView.fileNotFoundNotice': '无法在 Obsidian 中打开文件：{path}',
 
   // Task Modal
   'taskModal.title': '运行 Antigravity 库任务',

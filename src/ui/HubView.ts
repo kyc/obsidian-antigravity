@@ -1,12 +1,23 @@
-import { ItemView, Notice, WorkspaceLeaf } from 'obsidian';
+import * as crypto from 'crypto';
+import { ItemView, normalizePath, Notice, OpenViewState, TFile, WorkspaceLeaf } from 'obsidian';
 import { AgyHubManager } from '../core/AgyHubManager';
 import { sanitizeProfile } from '../core/AgyProfile';
+import {
+  buildHubFileLinkBridgeScript,
+  isTrustedHubWebviewUrl,
+  normalizeVaultRoot,
+  parseHubFileLinkBridgeMessage,
+  ResolvedVaultFileLink,
+  resolveVaultFileLink,
+} from '../core/HubFileLink';
 import { t } from '../i18n';
 
 export const ANTIGRAVITY_HUB_VIEW_TYPE = 'antigravity-hub-view';
 
 interface ElectronWebviewElement extends HTMLElement {
   src: string;
+  getURL?: () => string;
+  executeJavaScript?: (code: string, userGesture?: boolean) => Promise<unknown>;
 }
 
 declare global {
@@ -17,6 +28,8 @@ declare global {
 
 export class HubView extends ItemView {
   private webviewEl: ElectronWebviewElement | null = null;
+  private webviewDomReadyListener: (() => void) | null = null;
+  private webviewConsoleMessageListener: ((evt: Event) => void) | null = null;
   private loadingEl: HTMLElement | null = null;
   private retryBtnEl: HTMLButtonElement | null = null;
   private container!: HTMLElement;
@@ -24,6 +37,8 @@ export class HubView extends ItemView {
   private startupTimer: number | null = null;
   private reloadTimer: number | null = null;
   private clickBoundContainer: HTMLElement | null = null;
+  private hasInjectedFileLinkBridge: boolean = false;
+  private readonly fileLinkBridgePrefix: string = `__OBSIDIAN_AGY_OPEN_FILE__:${crypto.randomBytes(16).toString('hex')}:`;
 
   constructor(
     leaf: WorkspaceLeaf,
@@ -35,6 +50,7 @@ export class HubView extends ItemView {
     private getDefaultAgent?: () => string,
     private getAllowUnrestricted?: () => boolean,
     private getProxyUrl?: () => string,
+    private getOpenFileLinksInObsidian?: () => boolean,
   ) {
     super(leaf);
   }
@@ -115,8 +131,8 @@ export class HubView extends ItemView {
       this.startupTimer = null;
     }
     this.clearReloadTimer();
+    this.detachWebview();
     this.container?.empty();
-    this.webviewEl = null;
     this.loadingEl = null;
     this.retryBtnEl = null;
   }
@@ -156,6 +172,159 @@ export class HubView extends ItemView {
   refreshHub(): void {
     if (!this.isClosed) {
       void this.initHub();
+    }
+  }
+
+  syncFileLinkInterception(): void {
+    if (
+      this.isClosed ||
+      !this.webviewEl ||
+      typeof this.webviewEl.executeJavaScript !== 'function'
+    ) {
+      return;
+    }
+
+    const enabled = this.isOpenFileLinksInObsidianEnabled();
+    if (!enabled && !this.hasInjectedFileLinkBridge) {
+      return;
+    }
+
+    const currentUrl =
+      typeof this.webviewEl.getURL === 'function'
+        ? this.webviewEl.getURL()
+        : (this.webviewEl.getAttribute('src') ?? '');
+    if (!isTrustedHubWebviewUrl(currentUrl, this.hubManager.getHubUrl())) {
+      return;
+    }
+
+    const vaultPath = this.getVaultPath() ?? this.hubManager.getVaultPath() ?? '';
+    const script = buildHubFileLinkBridgeScript({
+      enabled,
+      vaultPath,
+      messagePrefix: this.fileLinkBridgePrefix,
+    });
+    this.hasInjectedFileLinkBridge = true;
+    void Promise.resolve(this.webviewEl.executeJavaScript(script)).catch(() => undefined);
+  }
+
+  private isOpenFileLinksInObsidianEnabled(): boolean {
+    return this.getOpenFileLinksInObsidian ? this.getOpenFileLinksInObsidian() : false;
+  }
+
+  private detachWebview(): void {
+    this.hasInjectedFileLinkBridge = false;
+    if (!this.webviewEl) {
+      return;
+    }
+    if (typeof this.webviewEl.removeEventListener === 'function') {
+      if (this.webviewDomReadyListener) {
+        this.webviewEl.removeEventListener('dom-ready', this.webviewDomReadyListener);
+      }
+      if (this.webviewConsoleMessageListener) {
+        this.webviewEl.removeEventListener('console-message', this.webviewConsoleMessageListener);
+      }
+    }
+    this.webviewDomReadyListener = null;
+    this.webviewConsoleMessageListener = null;
+    this.webviewEl.remove();
+    this.webviewEl = null;
+  }
+
+  private handleWebviewConsoleMessage(evt: Event): void {
+    if (!this.isOpenFileLinksInObsidianEnabled()) {
+      return;
+    }
+
+    const message = (evt as Event & { message?: unknown }).message;
+    if (typeof message !== 'string') {
+      return;
+    }
+
+    const payload = parseHubFileLinkBridgeMessage(message, this.fileLinkBridgePrefix);
+    if (!payload) {
+      return;
+    }
+
+    const vaultPath = this.getVaultPath() ?? this.hubManager.getVaultPath();
+    if (!vaultPath) {
+      return;
+    }
+
+    const resolved = resolveVaultFileLink(payload.uri, vaultPath);
+    if (!resolved) {
+      return;
+    }
+
+    void this.openVaultFileInObsidian(resolved, { newTab: payload.newTab });
+  }
+
+  private findVaultFile(relativePath: string, caseInsensitive: boolean): TFile | null {
+    const normalized = normalizePath(relativePath);
+    const exact = this.app?.vault?.getAbstractFileByPath?.(normalized);
+    if (exact instanceof TFile) {
+      return exact;
+    }
+
+    if (caseInsensitive && typeof this.app?.vault?.getFiles === 'function') {
+      const lower = normalized.toLowerCase();
+      for (const candidate of this.app.vault.getFiles()) {
+        if (candidate.path.toLowerCase() === lower) {
+          return candidate;
+        }
+      }
+    }
+
+    return null;
+  }
+
+  private findOpenFileLeaf(filePath: string): WorkspaceLeaf | null {
+    let matched: WorkspaceLeaf | null = null;
+    const rootSplit = this.app?.workspace?.rootSplit;
+    this.app?.workspace?.iterateAllLeaves?.((leaf) => {
+      if (matched) return;
+      if (rootSplit !== undefined && leaf.getRoot?.() !== rootSplit) {
+        return;
+      }
+      const viewFile = (leaf.view as { file?: { path?: string } } | null)?.file;
+      const deferredStateFile = (leaf.getViewState?.()?.state as { file?: unknown } | undefined)?.file;
+      if (viewFile?.path === filePath || deferredStateFile === filePath) {
+        matched = leaf;
+      }
+    });
+    return matched;
+  }
+
+  private async openVaultFileInObsidian(
+    resolved: ResolvedVaultFileLink,
+    options: { newTab: boolean },
+  ): Promise<void> {
+    const vaultPath = this.getVaultPath() ?? this.hubManager.getVaultPath() ?? '';
+    const caseInsensitive = normalizeVaultRoot(vaultPath)?.caseInsensitive ?? false;
+    const file = this.findVaultFile(resolved.relativePath, caseInsensitive);
+    if (!file) {
+      new Notice(t('hubView.fileNotFoundNotice', { path: resolved.relativePath }));
+      return;
+    }
+
+    const openState: OpenViewState = { active: true };
+    if (resolved.line !== undefined) {
+      openState.eState = { line: Math.max(0, resolved.line - 1) };
+    } else if (resolved.subpath) {
+      openState.eState = { subpath: `#${resolved.subpath}` };
+    }
+
+    const targetLeaf =
+      (!options.newTab ? this.findOpenFileLeaf(file.path) : null) ??
+      this.app?.workspace?.getLeaf?.('tab');
+    if (!targetLeaf) {
+      return;
+    }
+
+    try {
+      await targetLeaf.openFile(file, openState);
+      void this.app.workspace.revealLeaf(targetLeaf);
+    } catch {
+      new Notice(t('hubView.fileNotFoundNotice', { path: resolved.relativePath }));
     }
   }
 
@@ -241,10 +410,7 @@ export class HubView extends ItemView {
     if (this.isClosed) return;
     this.clearReloadTimer();
     this.retryBtnEl = null;
-    if (this.webviewEl) {
-      this.webviewEl.remove();
-      this.webviewEl = null;
-    }
+    this.detachWebview();
     if (!this.loadingEl) {
       this.loadingEl = this.container.createDiv({ cls: 'antigravity-hub-loading' });
     } else {
@@ -258,10 +424,7 @@ export class HubView extends ItemView {
   private renderError(message: string): void {
     if (this.isClosed) return;
     this.clearReloadTimer();
-    if (this.webviewEl) {
-      this.webviewEl.remove();
-      this.webviewEl = null;
-    }
+    this.detachWebview();
     if (!this.loadingEl) {
       this.loadingEl = this.container.createDiv({ cls: 'antigravity-hub-loading' });
     } else {
@@ -284,18 +447,31 @@ export class HubView extends ItemView {
 
     const partition = `persist:antigravity-${sanitizeProfile(this.getProfile())}`;
     if (this.webviewEl && this.webviewEl.getAttribute('partition') !== partition) {
-      this.webviewEl.remove();
-      this.webviewEl = null;
+      this.detachWebview();
     }
 
     if (!this.webviewEl) {
-      this.webviewEl = this.container.createEl('webview', {
+      const webview = this.container.createEl('webview', {
         cls: 'antigravity-hub-webview',
         attr: {
           allowpopups: '',
           partition,
         },
       });
+      this.webviewEl = webview;
+      this.webviewDomReadyListener = () => {
+        if (webview === this.webviewEl && !this.isClosed) {
+          this.hasInjectedFileLinkBridge = false;
+          this.syncFileLinkInterception();
+        }
+      };
+      this.webviewConsoleMessageListener = (evt: Event) => {
+        if (webview === this.webviewEl && !this.isClosed) {
+          this.handleWebviewConsoleMessage(evt);
+        }
+      };
+      webview.addEventListener('dom-ready', this.webviewDomReadyListener);
+      webview.addEventListener('console-message', this.webviewConsoleMessageListener);
     }
 
     this.webviewEl.setAttribute('src', url);

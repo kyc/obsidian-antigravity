@@ -118,6 +118,33 @@ describe('AntigravityPlugin lifecycle and settings synchronization', () => {
       expect(stopSpy).not.toHaveBeenCalled();
     });
 
+    it('syncs openFileLinksInObsidian on open HubViews without restarting the running hub', async () => {
+      jest.spyOn(plugin.resolver, 'resolve').mockReturnValue('/bin/agy');
+      simulateRunningHub({ executable: '/bin/agy' });
+
+      const hubView = new HubView(
+        { app } as unknown as WorkspaceLeaf,
+        plugin.hubManager,
+        () => '/bin/agy',
+        () => '/mock/vault/path',
+        () => plugin.settings.hubPort,
+        () => plugin.settings.hubProfile,
+      );
+      const syncSpy = jest.spyOn(hubView, 'syncFileLinkInterception').mockImplementation(() => {});
+      const refreshSpy = jest.spyOn(hubView, 'refreshHub').mockImplementation(() => {});
+      app.workspace.getLeavesOfType = jest.fn().mockImplementation((type: string) =>
+        type === ANTIGRAVITY_HUB_VIEW_TYPE ? [{ view: hubView }] : [],
+      );
+      const stopSpy = jest.spyOn(plugin.hubManager, 'stopHub');
+
+      plugin.settings.openFileLinksInObsidian = false;
+      await plugin.saveSettings();
+
+      expect(syncSpy).toHaveBeenCalledTimes(1);
+      expect(stopSpy).not.toHaveBeenCalled();
+      expect(refreshSpy).not.toHaveBeenCalled();
+    });
+
     it('stops and refreshes running hub when cliPath resolves to a different executable', async () => {
       jest.spyOn(plugin.resolver, 'resolve').mockImplementation((configured) => configured || '/bin/agy');
       simulateRunningHub({ executable: '/bin/agy' });

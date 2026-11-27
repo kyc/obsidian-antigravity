@@ -34,6 +34,7 @@ Unit tests mirror `src/` under `tests/unit/`.
 | `src/core/AgyResolver.ts` | Resolution and verification of `agy` binary across system and local paths. |
 | `src/core/AgyProfile.ts` | Isolated profile bootstrapping, OAuth token sync, onboarding pre-seeding, vault project registration, and safe workspace settings. |
 | `src/core/AgyHubManager.ts` | Hub daemon supervisor (`agy --hub`), free port allocation, concurrency serialization, stale process cleanup, and diagnostics. |
+| `src/core/HubFileLink.ts` | Hub `<webview>` vault file link URI resolution, origin validation, and click-interception bridge script. |
 | `src/core/VaultContext.ts` | Obsidian vault context extractor (active note, selection, folder), path traversal sanitization, and vault rules maintenance. |
 | `src/core/VaultTaskRunner.ts` | Discrete task execution runner (`agy --print`), active run lifecycle isolation, progress streaming, and permission mode control. |
 | `src/ui/HubView.ts` | Embedded Electron `<webview>` tab (`ItemView`) with native leaf actions (`refresh-cw`, `external-link`) embedding the Antigravity Hub SPA. |
