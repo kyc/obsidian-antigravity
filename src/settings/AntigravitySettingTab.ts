@@ -150,6 +150,14 @@ export class AntigravitySettingTab extends PluginSettingTab {
               key: 'autoStartHub',
             },
           },
+          {
+            name: t('settings.openFileLinksInObsidianName'),
+            desc: t('settings.openFileLinksInObsidianDesc'),
+            control: {
+              type: 'toggle',
+              key: 'openFileLinksInObsidian',
+            },
+          },
         ],
       },
       {

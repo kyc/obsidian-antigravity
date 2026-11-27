@@ -58,6 +58,8 @@ export default {
   'settings.hubPortDesc': 'Port for the local hub HTTP server (0 for random free port)',
   'settings.autoStartName': 'Auto-start hub server',
   'settings.autoStartDesc': 'Start the Antigravity hub server daemon when Obsidian loads',
+  'settings.openFileLinksInObsidianName': 'Open vault file links in Obsidian',
+  'settings.openFileLinksInObsidianDesc': 'Open clicked vault file links from the assistant hub in an Obsidian tab instead of the embedded preview pane. Hold Alt while clicking to use the hub preview.',
   'settings.groupRules': 'Vault rules',
   'settings.rulesEnableName': 'Maintain vault rules file',
   'settings.rulesEnableDesc': 'Automatically create and inject rules file (default AGENTS.md) for Obsidian conventions',
@@ -77,6 +79,7 @@ export default {
   'hubView.errVaultPath': 'Could not determine Obsidian vault path.',
   'hubView.errFailedStart': 'Failed to start hub: {error}',
   'hubView.retryButton': 'Retry',
+  'hubView.fileNotFoundNotice': 'Could not open file in Obsidian: {path}',
 
   // Task Modal
   'taskModal.title': 'Run Antigravity vault task',

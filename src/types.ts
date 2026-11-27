@@ -16,6 +16,7 @@ export interface AntigravityPluginSettings {
    * single headless task. Confirming one must not silently authorise the other.
    */
   hubUnrestrictedConfirmed: boolean;
+  openFileLinksInObsidian: boolean;
   language: 'auto' | 'en' | 'zh-cn' | 'zh-tw';
 }
 
@@ -32,6 +33,7 @@ export const DEFAULT_SETTINGS: AntigravityPluginSettings = {
   allowUnrestrictedTasks: false,
   unrestrictedConfirmed: false,
   hubUnrestrictedConfirmed: false,
+  openFileLinksInObsidian: false,
   language: 'auto',
 };
 
@@ -100,6 +102,10 @@ export function validateSettings(raw: unknown): AntigravityPluginSettings {
 
   if (typeof data.hubUnrestrictedConfirmed === 'boolean') {
     result.hubUnrestrictedConfirmed = data.hubUnrestrictedConfirmed;
+  }
+
+  if (typeof data.openFileLinksInObsidian === 'boolean') {
+    result.openFileLinksInObsidian = data.openFileLinksInObsidian;
   }
 
   if (
