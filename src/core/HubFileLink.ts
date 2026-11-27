@@ -15,13 +15,7 @@ export interface VaultRootInfo {
   caseInsensitive: boolean;
 }
 
-interface ParsedFileUri {
-  fsPath: string;
-  fragment: string;
-  isDirectoryHint: boolean;
-}
-
-function safeDecodeSegment(segment: string): string {
+function safeDecode(segment: string): string {
   try {
     return decodeURIComponent(segment);
   } catch {
@@ -29,40 +23,94 @@ function safeDecodeSegment(segment: string): string {
   }
 }
 
-function normalizePosixOrDriveSegments(rawPath: string): string | null {
-  const forward = rawPath.replace(/\\/g, '/').replace(/\/+/g, '/');
-  const driveMatch = /^([a-zA-Z]:)(?:\/(.*))?$/.exec(forward);
+/**
+ * Self-contained pure function shared between host validation and the
+ * `<webview>` guest bridge (serialized via `.toString()`). Must not reference
+ * any outer bindings so it remains standalone after minification.
+ */
+function extractVaultRelativePath(
+  rawUri: string,
+  vaultPrefix: string,
+  caseInsensitive: boolean,
+): string | null {
+  const trimmed = (rawUri || '').trim();
+  if (!vaultPrefix || !/^file:/i.test(trimmed)) {
+    return null;
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== 'file:') {
+    return null;
+  }
+
+  const host = (parsed.hostname || '').toLowerCase();
+  if (host !== '' && host !== 'localhost') {
+    return null;
+  }
+
+  const rawParts = parsed.pathname.split('/');
+  for (let i = 0; i < rawParts.length; i++) {
+    try {
+      rawParts[i] = decodeURIComponent(rawParts[i]);
+    } catch {
+      // Keep malformed percent-escape segments as-is
+    }
+  }
+  let decoded = rawParts.join('/').replace(/\\/g, '/');
+  if (decoded.endsWith('/')) {
+    return null;
+  }
+  decoded = decoded.replace(/^\/([a-zA-Z]:)(?=\/|$)/, '$1').replace(/\/+/g, '/');
+
+  let root = '';
+  let rest = '';
+  const driveMatch = /^([a-zA-Z]:)(?:\/(.*))?$/.exec(decoded);
   if (driveMatch) {
-    const drive = driveMatch[1];
-    const rest = driveMatch[2] ?? '';
-    const stack: string[] = [];
-    for (const seg of rest.split('/')) {
-      if (!seg || seg === '.') continue;
-      if (seg === '..') {
-        if (stack.length === 0) return null;
-        stack.pop();
-      } else {
-        stack.push(seg);
-      }
-    }
-    return stack.length > 0 ? `${drive}/${stack.join('/')}` : `${drive}/`;
+    root = driveMatch[1];
+    rest = driveMatch[2] ?? '';
+  } else if (decoded.startsWith('/')) {
+    root = '';
+    rest = decoded.slice(1);
+  } else {
+    return null;
   }
 
-  if (forward.startsWith('/')) {
-    const stack: string[] = [];
-    for (const seg of forward.slice(1).split('/')) {
-      if (!seg || seg === '.') continue;
-      if (seg === '..') {
-        if (stack.length === 0) return null;
-        stack.pop();
-      } else {
-        stack.push(seg);
-      }
+  const stack: string[] = [];
+  for (const seg of rest.split('/')) {
+    if (!seg || seg === '.') continue;
+    if (seg === '..') {
+      if (stack.length === 0) return null;
+      stack.pop();
+    } else {
+      stack.push(seg);
     }
-    return `/${stack.join('/')}`;
   }
 
-  return null;
+  const fsPath = `${root}/${stack.join('/')}`;
+  const cmpTarget = caseInsensitive ? fsPath.toLowerCase() : fsPath;
+  const cmpPrefix = caseInsensitive ? vaultPrefix.toLowerCase() : vaultPrefix;
+  if (!cmpTarget.startsWith(cmpPrefix)) {
+    return null;
+  }
+
+  const rel = fsPath.slice(vaultPrefix.length);
+  if (!rel) {
+    return null;
+  }
+
+  const relParts = rel.split('/');
+  for (let i = 0; i < relParts.length; i++) {
+    const s = relParts[i];
+    if (!s || s === '.' || s === '..' || s.charAt(0) === '.') {
+      return null;
+    }
+  }
+  return rel;
 }
 
 /**
@@ -73,15 +121,13 @@ export function normalizeVaultRoot(vaultPath: string): VaultRootInfo | null {
   const trimmed = (vaultPath || '').trim();
   if (!trimmed) return null;
 
-  const forward = trimmed.replace(/\\/g, '/').replace(/\/+/g, '/');
-  let root = forward;
+  let root = trimmed.replace(/\\/g, '/').replace(/\/+/g, '/');
   if (root.length > 1 && !/^[a-zA-Z]:\/$/.test(root)) {
     root = root.replace(/\/+$/, '');
   }
 
   if (!root) return null;
-  const caseInsensitive = /^[a-zA-Z]:(\/|$)/.test(root);
-  return { root, caseInsensitive };
+  return { root, caseInsensitive: /^[a-zA-Z]:(\/|$)/.test(root) };
 }
 
 /**
@@ -111,51 +157,6 @@ export function isTrustedHubWebviewUrl(currentUrl: string, expectedHubUrl: strin
 }
 
 /**
- * Parses a `file:` URI into a normalized local filesystem path and raw fragment.
- */
-export function fileUriToFsPath(rawUri: string): ParsedFileUri | null {
-  const trimmed = (rawUri || '').trim();
-  if (!/^file:/i.test(trimmed)) {
-    return null;
-  }
-
-  let parsed: URL;
-  try {
-    parsed = new URL(trimmed);
-  } catch {
-    return null;
-  }
-
-  if (parsed.protocol !== 'file:') {
-    return null;
-  }
-
-  const host = parsed.hostname.toLowerCase();
-  if (host !== '' && host !== 'localhost') {
-    return null;
-  }
-
-  const decodedPathname = parsed.pathname
-    .split('/')
-    .map((seg) => safeDecodeSegment(seg))
-    .join('/')
-    .replace(/\\/g, '/');
-
-  const isDirectoryHint = decodedPathname.endsWith('/');
-  const withoutLeadingDriveSlash = decodedPathname.replace(/^\/([a-zA-Z]:)(?=\/|$)/, '$1');
-  const fsPath = normalizePosixOrDriveSegments(withoutLeadingDriveSlash);
-  if (!fsPath) {
-    return null;
-  }
-
-  return {
-    fsPath,
-    fragment: parsed.hash,
-    isDirectoryHint,
-  };
-}
-
-/**
  * Extracts line numbers or Obsidian subpaths from a URI fragment.
  */
 export function parseFileLinkFragment(rawFragment: string): {
@@ -180,7 +181,7 @@ export function parseFileLinkFragment(rawFragment: string): {
     }
   }
 
-  return { subpath: safeDecodeSegment(stripped) };
+  return { subpath: safeDecode(stripped) };
 }
 
 /**
@@ -189,32 +190,20 @@ export function parseFileLinkFragment(rawFragment: string): {
  */
 export function resolveVaultFileLink(rawUri: string, vaultPath: string): ResolvedVaultFileLink | null {
   const vault = normalizeVaultRoot(vaultPath);
-  const parsed = fileUriToFsPath(rawUri);
-  if (!vault || !parsed || parsed.isDirectoryHint) {
+  if (!vault) {
     return null;
   }
 
   const prefix = vault.root.endsWith('/') ? vault.root : `${vault.root}/`;
-  const targetComparable = vault.caseInsensitive ? parsed.fsPath.toLowerCase() : parsed.fsPath;
-  const prefixComparable = vault.caseInsensitive ? prefix.toLowerCase() : prefix;
-
-  if (!targetComparable.startsWith(prefixComparable)) {
-    return null;
-  }
-
-  const relativePath = parsed.fsPath.slice(prefix.length);
+  const relativePath = extractVaultRelativePath(rawUri, prefix, vault.caseInsensitive);
   if (!relativePath) {
     return null;
   }
 
-  const segments = relativePath.split('/');
-  if (segments.some((seg) => !seg || seg === '.' || seg === '..' || seg.startsWith('.'))) {
-    return null;
-  }
-
+  const fragment = new URL(rawUri.trim()).hash;
   return {
     relativePath,
-    ...parseFileLinkFragment(parsed.fragment),
+    ...parseFileLinkFragment(fragment),
   };
 }
 
@@ -236,7 +225,7 @@ export function buildHubFileLinkBridgeScript(options: {
     messagePrefix: options.messagePrefix,
   });
 
-  return `(function(cfg){
+  return `(function(cfg, extractRelPath){
   var key = '__obsidianAntigravityLinkBridge';
   var state = window[key] || (window[key] = { installed: false });
   state.enabled = cfg.enabled;
@@ -246,87 +235,12 @@ export function buildHubFileLinkBridgeScript(options: {
   if (state.installed) return;
   state.installed = true;
 
-  function safeDecode(seg) {
-    try { return decodeURIComponent(seg); } catch (e) { return seg; }
-  }
-
-  function normalizeSegments(rawPath) {
-    var forward = rawPath.replace(/\\\\/g, '/').replace(/\\/+/g, '/');
-    var driveMatch = /^([a-zA-Z]:)(?:\\/(.*))?$/.exec(forward);
-    if (driveMatch) {
-      var drive = driveMatch[1];
-      var rest = driveMatch[2] || '';
-      var stack = [];
-      var parts = rest.split('/');
-      for (var i = 0; i < parts.length; i++) {
-        var seg = parts[i];
-        if (!seg || seg === '.') continue;
-        if (seg === '..') {
-          if (stack.length === 0) return null;
-          stack.pop();
-        } else {
-          stack.push(seg);
-        }
-      }
-      return stack.length > 0 ? drive + '/' + stack.join('/') : drive + '/';
-    }
-    if (forward.charAt(0) === '/') {
-      var pStack = [];
-      var pParts = forward.slice(1).split('/');
-      for (var j = 0; j < pParts.length; j++) {
-        var pSeg = pParts[j];
-        if (!pSeg || pSeg === '.') continue;
-        if (pSeg === '..') {
-          if (pStack.length === 0) return null;
-          pStack.pop();
-        } else {
-          pStack.push(pSeg);
-        }
-      }
-      return '/' + pStack.join('/');
-    }
-    return null;
-  }
-
-  function isVaultFileUri(rawUri) {
-    if (!rawUri || !state.vaultPrefix || !/^file:/i.test(String(rawUri).trim())) return false;
-    var parsed;
-    try { parsed = new URL(String(rawUri).trim()); } catch (e) { return false; }
-    if (parsed.protocol !== 'file:') return false;
-    var host = (parsed.hostname || '').toLowerCase();
-    if (host !== '' && host !== 'localhost') return false;
-    var pathParts = parsed.pathname.split('/');
-    for (var i = 0; i < pathParts.length; i++) {
-      pathParts[i] = safeDecode(pathParts[i]);
-    }
-    var decoded = pathParts.join('/').replace(/\\\\/g, '/');
-    if (decoded.endsWith('/')) return false;
-    decoded = decoded.replace(/^\\/([a-zA-Z]:)(?=\\/|$)/, '$1');
-    var fsPath = normalizeSegments(decoded);
-    if (!fsPath) return false;
-    var cmpTarget = state.caseInsensitive ? fsPath.toLowerCase() : fsPath;
-    var cmpPrefix = state.caseInsensitive ? state.vaultPrefix.toLowerCase() : state.vaultPrefix;
-    if (!cmpTarget.startsWith(cmpPrefix)) return false;
-    var rel = fsPath.slice(state.vaultPrefix.length);
-    if (!rel) return false;
-    var relParts = rel.split('/');
-    for (var k = 0; k < relParts.length; k++) {
-      var s = relParts[k];
-      if (!s || s === '.' || s === '..' || s.charAt(0) === '.') return false;
-    }
-    return true;
-  }
-
   function handleEvent(evt, isAux) {
     if (!state.enabled || !state.vaultPrefix || evt.altKey) return;
-    var newTab = false;
-    if (isAux) {
-      if (evt.button !== 1) return;
-      newTab = true;
-    } else {
-      if (evt.button !== 0) return;
-      newTab = Boolean(evt.ctrlKey || evt.metaKey);
-    }
+    var newTab = isAux ? evt.button === 1 : evt.button === 0;
+    if (!newTab) return;
+    newTab = isAux || Boolean(evt.ctrlKey || evt.metaKey);
+
     var rawTarget = evt.target;
     var targetEl = rawTarget && typeof rawTarget.closest === 'function'
       ? rawTarget
@@ -345,7 +259,7 @@ export function buildHubFileLinkBridgeScript(options: {
       rawUri = el.getAttribute('href');
     }
 
-    if (!isVaultFileUri(rawUri)) return;
+    if (!extractRelPath(rawUri, state.vaultPrefix, state.caseInsensitive)) return;
 
     evt.preventDefault();
     if (typeof evt.stopImmediatePropagation === 'function') {
@@ -358,7 +272,7 @@ export function buildHubFileLinkBridgeScript(options: {
 
   document.addEventListener('click', function(evt) { handleEvent(evt, false); }, true);
   document.addEventListener('auxclick', function(evt) { handleEvent(evt, true); }, true);
-})(${configJson});`;
+})(${configJson}, ${extractVaultRelativePath.toString()});`;
 }
 
 /**
@@ -372,10 +286,9 @@ export function parseHubFileLinkBridgeMessage(
     return null;
   }
 
-  const jsonPart = message.slice(expectedPrefix.length);
   let raw: unknown;
   try {
-    raw = JSON.parse(jsonPart);
+    raw = JSON.parse(message.slice(expectedPrefix.length));
   } catch {
     return null;
   }

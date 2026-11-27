@@ -1,6 +1,5 @@
 import {
   buildHubFileLinkBridgeScript,
-  fileUriToFsPath,
   isTrustedHubWebviewUrl,
   normalizeVaultRoot,
   parseFileLinkFragment,
@@ -39,52 +38,6 @@ describe('HubFileLink', () => {
     });
   });
 
-  describe('fileUriToFsPath', () => {
-    it('parses POSIX, Windows, localhost, and vscode-uri encoded colons', () => {
-      expect(fileUriToFsPath('file:///Users/alice/vault/note.md#L12')).toEqual({
-        fsPath: '/Users/alice/vault/note.md',
-        fragment: '#L12',
-        isDirectoryHint: false,
-      });
-      expect(fileUriToFsPath('file://localhost/Users/alice/vault/note.md')).toEqual({
-        fsPath: '/Users/alice/vault/note.md',
-        fragment: '',
-        isDirectoryHint: false,
-      });
-      expect(fileUriToFsPath('file:///C:/Users/Alice/Vault/note.md')).toEqual({
-        fsPath: 'C:/Users/Alice/Vault/note.md',
-        fragment: '',
-        isDirectoryHint: false,
-      });
-      expect(fileUriToFsPath('file:///c%3A/Users/Alice/Vault/note.md#L3-L8')).toEqual({
-        fsPath: 'c:/Users/Alice/Vault/note.md',
-        fragment: '#L3-L8',
-        isDirectoryHint: false,
-      });
-    });
-
-    it('keeps %23 in filename while preserving #fragment and handles malformed escapes', () => {
-      expect(fileUriToFsPath('file:///vault/C%23%20Notes%20%E4%B8%AD%E6%96%87.md#L10-L20')).toEqual({
-        fsPath: '/vault/C# Notes 中文.md',
-        fragment: '#L10-L20',
-        isDirectoryHint: false,
-      });
-      expect(fileUriToFsPath('file:///vault/100%ZZ.md')).toEqual({
-        fsPath: '/vault/100%ZZ.md',
-        fragment: '',
-        isDirectoryHint: false,
-      });
-    });
-
-    it('rejects non-file schemes and non-local hosts', () => {
-      expect(fileUriToFsPath('https://example.com/a.md')).toBeNull();
-      expect(fileUriToFsPath('conversation://abc')).toBeNull();
-      expect(fileUriToFsPath('sidecar://pane')).toBeNull();
-      expect(fileUriToFsPath('obsidian://open?vault=v&file=a')).toBeNull();
-      expect(fileUriToFsPath('file://remote-host/share/note.md')).toBeNull();
-    });
-  });
-
   describe('parseFileLinkFragment', () => {
     it('parses line, range, column, and heading subpaths', () => {
       expect(parseFileLinkFragment('')).toEqual({});
@@ -97,13 +50,19 @@ describe('HubFileLink', () => {
   });
 
   describe('resolveVaultFileLink', () => {
-    it('resolves POSIX and Windows vault-local files with fragments', () => {
+    it('resolves POSIX, localhost, Windows, vscode-uri, encoded #, and malformed % segments', () => {
       expect(
         resolveVaultFileLink('file:///Users/alice/vault/Folder/Note%201.md#L15-L20', '/Users/alice/vault'),
       ).toEqual({
         relativePath: 'Folder/Note 1.md',
         line: 15,
         endLine: 20,
+      });
+
+      expect(
+        resolveVaultFileLink('file://localhost/Users/alice/vault/100%ZZ.md', '/Users/alice/vault'),
+      ).toEqual({
+        relativePath: '100%ZZ.md',
       });
 
       expect(
@@ -117,7 +76,7 @@ describe('HubFileLink', () => {
       });
     });
 
-    it('rejects sibling prefixes, traversal, artifacts outside vault, directories, and dotfiles', () => {
+    it('rejects sibling prefixes, traversal, external artifacts, directories, dotfiles, and non-vault schemes/hosts', () => {
       expect(resolveVaultFileLink('file:///mock/vault-backup/note.md', '/mock/vault')).toBeNull();
       expect(resolveVaultFileLink('file:///mock/vault/../secret.md', '/mock/vault')).toBeNull();
       expect(
@@ -127,6 +86,9 @@ describe('HubFileLink', () => {
       expect(resolveVaultFileLink('file:///mock/vault/Folder/', '/mock/vault')).toBeNull();
       expect(resolveVaultFileLink('file:///mock/vault/.obsidian/app.json', '/mock/vault')).toBeNull();
       expect(resolveVaultFileLink('file:///mock/vault/.git/config', '/mock/vault')).toBeNull();
+      expect(resolveVaultFileLink('https://example.com/a.md', '/mock/vault')).toBeNull();
+      expect(resolveVaultFileLink('conversation://abc', '/mock/vault')).toBeNull();
+      expect(resolveVaultFileLink('file://remote-host/mock/vault/a.md', '/mock/vault')).toBeNull();
     });
   });
 
@@ -146,17 +108,8 @@ describe('HubFileLink', () => {
   });
 
   describe('buildHubFileLinkBridgeScript', () => {
-    interface MockEl {
-      tagName: string;
-      attrs: Record<string, string>;
-      parentElement: MockEl | null;
-      getAttribute: (name: string) => string | null;
-      hasAttribute: (name: string) => boolean;
-      closest: (selector: string) => MockEl | null;
-    }
-
-    function makeEl(tagName: string, attrs: Record<string, string> = {}, parentElement: MockEl | null = null): MockEl {
-      const el: MockEl = {
+    function makeEl(tagName: string, attrs: Record<string, string> = {}, parentElement: any = null) {
+      const el: any = {
         tagName: tagName.toUpperCase(),
         attrs,
         parentElement,
@@ -165,7 +118,7 @@ describe('HubFileLink', () => {
         closest: (selector: string) => {
           const wantDataUri = selector.includes('[data-uri]');
           const wantAnchorHref = selector.includes('a[href]');
-          let cur: MockEl | null = el;
+          let cur: any = el;
           while (cur) {
             if (wantDataUri && cur.hasAttribute('data-uri')) return cur;
             if (wantAnchorHref && cur.tagName === 'A' && cur.hasAttribute('href')) return cur;
@@ -181,24 +134,15 @@ describe('HubFileLink', () => {
       const listeners: Record<string, Array<(evt: any) => void>> = { click: [], auxclick: [] };
       const consoleInfos: string[] = [];
       const mockWindow: Record<string, any> = {
-        console: {
-          info: (msg: string) => {
-            consoleInfos.push(msg);
-          },
-        },
+        console: { info: (msg: string) => consoleInfos.push(msg) },
       };
       const mockDocument = {
         addEventListener: jest.fn((type: string, fn: (evt: any) => void) => {
-          listeners[type] = listeners[type] || [];
           listeners[type].push(fn);
         }),
       };
 
-      const run = (script: string) => {
-        const fn = new Function('window', 'document', script);
-        fn(mockWindow, mockDocument);
-      };
-
+      const run = (script: string) => new Function('window', 'document', script)(mockWindow, mockDocument);
       const dispatch = (type: 'click' | 'auxclick', target: any, opts: Record<string, any> = {}) => {
         const evt = {
           button: type === 'auxclick' ? 1 : 0,
@@ -211,13 +155,11 @@ describe('HubFileLink', () => {
           stopPropagation: jest.fn(),
           ...opts,
         };
-        for (const listener of listeners[type]) {
-          listener(evt);
-        }
+        for (const listener of listeners[type]) listener(evt);
         return evt;
       };
 
-      return { listeners, consoleInfos, mockDocument, run, dispatch };
+      return { listeners, consoleInfos, run, dispatch };
     }
 
     it('intercepts clickable vault IconPill and anchor links, supports modifiers, and stays idempotent', () => {
@@ -234,53 +176,39 @@ describe('HubFileLink', () => {
       expect(sandbox.listeners.click).toHaveLength(1);
       expect(sandbox.listeners.auxclick).toHaveLength(1);
 
-      // 1. IconPill (<span role="button" data-uri="...">) with inner child span
       const pill = makeEl('span', { role: 'button', 'data-uri': 'file:///c%3A/Users/Alice/Vault/Note.md#L4' });
       const innerTextSpan = makeEl('span', {}, pill);
       const evt1 = sandbox.dispatch('click', innerTextSpan);
       expect(evt1.preventDefault).toHaveBeenCalledTimes(1);
       expect(evt1.stopImmediatePropagation).toHaveBeenCalledTimes(1);
-      expect(sandbox.consoleInfos).toHaveLength(1);
       expect(parseHubFileLinkBridgeMessage(sandbox.consoleInfos[0], prefix)).toEqual({
         uri: 'file:///c%3A/Users/Alice/Vault/Note.md#L4',
         newTab: false,
       });
 
-      // 2. Anchor link with Ctrl+Click and middle-click sets newTab: true
       const anchor = makeEl('a', { href: 'file:///C:/Users/Alice/Vault/Sub/Doc.md' });
-      const evt2 = sandbox.dispatch('click', anchor, { ctrlKey: true });
-      expect(evt2.preventDefault).toHaveBeenCalledTimes(1);
+      expect(sandbox.dispatch('click', anchor, { ctrlKey: true }).preventDefault).toHaveBeenCalledTimes(1);
       expect(parseHubFileLinkBridgeMessage(sandbox.consoleInfos[1], prefix)).toEqual({
         uri: 'file:///C:/Users/Alice/Vault/Sub/Doc.md',
         newTab: true,
       });
 
-      const evt3 = sandbox.dispatch('auxclick', anchor);
-      expect(evt3.preventDefault).toHaveBeenCalledTimes(1);
+      expect(sandbox.dispatch('auxclick', anchor).preventDefault).toHaveBeenCalledTimes(1);
       expect(parseHubFileLinkBridgeMessage(sandbox.consoleInfos[2], prefix)).toEqual({
         uri: 'file:///C:/Users/Alice/Vault/Sub/Doc.md',
         newTab: true,
       });
 
-      // 3. Alt+Click, comment-pill, non-interactive breadcrumb div, external artifacts, dotfiles, and https are ignored
       expect(sandbox.dispatch('click', pill, { altKey: true }).preventDefault).not.toHaveBeenCalled();
-      const commentPill = makeEl('span', {
-        role: 'button',
-        'data-testid': 'comment-pill',
-        'data-uri': 'file:///C:/Users/Alice/Vault/Note.md',
-      });
-      expect(sandbox.dispatch('click', commentPill).preventDefault).not.toHaveBeenCalled();
-      const breadcrumbDiv = makeEl('div', { 'data-uri': 'file:///C:/Users/Alice/Vault/Note.md' });
-      expect(sandbox.dispatch('click', breadcrumbDiv).preventDefault).not.toHaveBeenCalled();
-      const artifactBtn = makeEl('button', { 'data-uri': 'file:///C:/Users/Alice/.gemini/antigravity/brain/plan.md' });
-      expect(sandbox.dispatch('click', artifactBtn).preventDefault).not.toHaveBeenCalled();
-      const dotfileAnchor = makeEl('a', { href: 'file:///C:/Users/Alice/Vault/.obsidian/app.json' });
-      expect(sandbox.dispatch('click', dotfileAnchor).preventDefault).not.toHaveBeenCalled();
-      const webAnchor = makeEl('a', { href: 'https://obsidian.md' });
-      expect(sandbox.dispatch('click', webAnchor).preventDefault).not.toHaveBeenCalled();
+      expect(
+        sandbox.dispatch('click', makeEl('span', { role: 'button', 'data-testid': 'comment-pill', 'data-uri': 'file:///C:/Users/Alice/Vault/Note.md' })).preventDefault,
+      ).not.toHaveBeenCalled();
+      expect(sandbox.dispatch('click', makeEl('div', { 'data-uri': 'file:///C:/Users/Alice/Vault/Note.md' })).preventDefault).not.toHaveBeenCalled();
+      expect(sandbox.dispatch('click', makeEl('button', { 'data-uri': 'file:///C:/Users/Alice/.gemini/antigravity/brain/plan.md' })).preventDefault).not.toHaveBeenCalled();
+      expect(sandbox.dispatch('click', makeEl('a', { href: 'file:///C:/Users/Alice/Vault/.obsidian/app.json' })).preventDefault).not.toHaveBeenCalled();
+      expect(sandbox.dispatch('click', makeEl('a', { href: 'https://obsidian.md' })).preventDefault).not.toHaveBeenCalled();
       expect(sandbox.consoleInfos).toHaveLength(3);
 
-      // 4. Re-injecting with enabled=false disables interception without adding duplicate listeners
       sandbox.run(
         buildHubFileLinkBridgeScript({
           enabled: false,
@@ -291,7 +219,6 @@ describe('HubFileLink', () => {
       expect(sandbox.listeners.click).toHaveLength(1);
       expect(sandbox.dispatch('click', pill).preventDefault).not.toHaveBeenCalled();
 
-      // 5. Re-enabling restores interception dynamically
       sandbox.run(
         buildHubFileLinkBridgeScript({
           enabled: true,
